@@ -42,10 +42,30 @@ JOKES = [
     "Why did the developer go broke? Because they used up all their cache!",
 ]
 
+QUOTES = [
+    "Small steps taken every day can move you farther than one perfect plan.",
+    "Curiosity turns an ordinary moment into a chance to learn.",
+    "Progress grows when you return to the work, one day at a time.",
+    "Kindness can make even difficult conversations easier.",
+    "Your next attempt can use what you learned from the last one.",
+]
+
+FACTS = [
+    "Sunlight takes about 8 minutes and 20 seconds to reach Earth.",
+    "Earth's atmosphere is about 78% nitrogen.",
+    "Octopuses have three hearts.",
+    "The Rosetta Stone carries the same decree in three scripts: hieroglyphic, Demotic, and Ancient Greek.",
+    "The Wright brothers made the first successful powered airplane flight in 1903.",
+]
+
 AI_SYSTEM_PROMPT = (
     "You are a helpful Telegram bot. Keep your answers concise, under 4 paragraphs. "
     "Do not use markdown tables. Use bullet points for lists. "
-    "Use simple language suitable for a mobile chat screen."
+    "Use simple language suitable for a mobile chat screen. "
+    "You are a Telegram bot. Do NOT invent, hallucinate, or make up commands. "
+    "If a user asks what commands you have, reply exactly with: "
+    "'Type /help to see my available commands.' "
+    "Never list commands that are not explicitly provided to you."
 )
 MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
@@ -209,8 +229,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List the bot's available commands."""
     await update.message.reply_text(
-        "Here is what I can do: /start, /help, /joke, /image, /weather, "
-        "/summarize, /translate, /define, /calculate, /roll, /coin"
+        "Available commands: /start, /help, /joke, /image, /quote, /facts, /weather"
     )
 
 
@@ -237,18 +256,17 @@ async def image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("I couldn't generate that image. Please try another prompt.")
 
 
-def fetch_weather(city: str, api_key: str) -> tuple[float, str]:
-    """Fetch current metric weather from OpenWeatherMap."""
+def fetch_weather(city: str) -> str:
+    """Fetch a concise weather report from wttr.in."""
     response = requests.get(
-        "https://api.openweathermap.org/data/2.5/weather",
-        params={"q": city, "appid": api_key, "units": "metric"},
+        f"https://wttr.in/{quote(city, safe='')}?format=3",
         timeout=10,
     )
     response.raise_for_status()
-    data = response.json()
-    temperature = data["main"]["temp"]
-    description = data["weather"][0]["description"]
-    return temperature, description
+    weather_text = response.text.strip()
+    if not weather_text:
+        raise ValueError("Weather service returned an empty response")
+    return weather_text
 
 
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -261,32 +279,26 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Usage: /weather <city>")
         return
 
-    api_key = os.environ.get("WEATHER_API_KEY")
-    if not api_key:
-        await message.reply_text("Weather isn't configured yet. Please try again later.")
-        return
-
     try:
-        temperature, description = await asyncio.to_thread(fetch_weather, city, api_key)
-    except requests.HTTPError as error:
-        status_code = error.response.status_code if error.response is not None else None
-        if status_code == 404:
-            await message.reply_text(f"I couldn't find a city named {html.escape(city)}.")
-        elif status_code == 401:
-            logging.error("OpenWeatherMap rejected WEATHER_API_KEY")
-            await message.reply_text("The weather service is not configured correctly.")
-        else:
-            logging.exception("OpenWeatherMap request failed")
-            await message.reply_text("I couldn't fetch the weather right now. Please try again.")
-        return
-    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError):
-        logging.exception("Could not retrieve or parse weather for %s", city)
+        weather_text = await asyncio.to_thread(fetch_weather, city)
+    except (requests.RequestException, ValueError):
+        logging.exception("Could not retrieve weather for %s", city)
         await message.reply_text("I couldn't fetch the weather right now. Please try again.")
         return
 
-    await message.reply_text(
-        f"{html.escape(city)}: {temperature:.1f}°C, {html.escape(description)}."
-    )
+    await message.reply_text(html.escape(weather_text))
+
+
+async def quote_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with a randomly selected inspirational quote."""
+    if update.message is not None:
+        await update.message.reply_text(random.choice(QUOTES))
+
+
+async def facts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with a randomly selected science or history fact."""
+    if update.message is not None:
+        await update.message.reply_text(random.choice(FACTS))
 
 
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,6 +593,8 @@ def main() -> None:
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("joke", joke))
     application.add_handler(CommandHandler("image", image))
+    application.add_handler(CommandHandler("quote", quote_command))
+    application.add_handler(CommandHandler("facts", facts))
     application.add_handler(CommandHandler("weather", weather))
     application.add_handler(CommandHandler("summarize", summarize))
     application.add_handler(CommandHandler("translate", translate))
