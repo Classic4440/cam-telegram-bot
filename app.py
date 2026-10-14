@@ -7,6 +7,7 @@ import os
 import operator
 import random
 import re
+import tempfile
 from threading import Thread
 from urllib.parse import quote
 
@@ -46,6 +47,7 @@ AI_SYSTEM_PROMPT = (
     "Do not use markdown tables. Use bullet points for lists. "
     "Use simple language suitable for a mobile chat screen."
 )
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 _BINARY_OPERATORS = {
     ast.Add: operator.add,
@@ -437,10 +439,17 @@ async def coin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(random.choice(("Heads", "Tails")))
 
 
-async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send the user's text to Groq and reply with the model's response."""
+async def answer_with_ai(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text_override: str | None = None,
+) -> None:
+    """Send text or a voice transcript to Groq and reply with its response."""
     message = update.message
-    if message is None or message.text is None or message.from_user is None:
+    if message is None or message.from_user is None:
+        return
+    user_text = text_override if text_override is not None else message.text
+    if user_text is None:
         return
 
     client: AsyncOpenAI = context.application.bot_data["ai_client"]
@@ -459,7 +468,7 @@ async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             model=model,
             messages=[{"role": "system", "content": AI_SYSTEM_PROMPT}]
             + history
-            + [{"role": "user", "content": message.text}],
+            + [{"role": "user", "content": user_text}],
         )
         response = completion.choices[0].message.content
         response = response or "I couldn't generate a response. Please try again."
@@ -470,12 +479,65 @@ async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         await asyncio.to_thread(
-            save_chat_turn, supabase_client, user_id, message.text, response
+            save_chat_turn, supabase_client, user_id, user_text, response
         )
     except Exception:
         logging.exception("Could not save chat history for user %s", user_id)
 
     await reply_with_ai_format(message, response)
+
+
+async def transcribe_voice(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Transcribe a Telegram voice message and pass it through the AI chat flow."""
+    message = update.message
+    if message is None or message.voice is None:
+        return
+
+    voice = message.voice
+    if voice.file_size is not None and voice.file_size > MAX_AUDIO_BYTES:
+        await message.reply_text("That voice message is too large to transcribe (25 MB maximum).")
+        return
+
+    audio_path = None
+    try:
+        telegram_file = await voice.get_file()
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as audio_file:
+            audio_path = audio_file.name
+
+        await telegram_file.download_to_drive(custom_path=audio_path)
+        if os.path.getsize(audio_path) > MAX_AUDIO_BYTES:
+            await message.reply_text("That voice message is too large to transcribe (25 MB maximum).")
+            return
+
+        client: AsyncOpenAI = context.application.bot_data["ai_client"]
+        with open(audio_path, "rb") as audio_file:
+            transcription = await client.audio.transcriptions.create(
+                model="whisper-large-v3",
+                file=audio_file,
+            )
+
+        transcript = transcription.text.strip()
+        if not transcript:
+            await message.reply_text("I couldn't detect any speech in that voice message.")
+            return
+
+        await answer_with_ai(update, context, transcript)
+    except APIError:
+        logging.exception("Groq voice transcription failed")
+        await message.reply_text("I couldn't transcribe that voice message. Please try a shorter recording.")
+    except (TelegramError, OSError, ValueError):
+        logging.exception("Could not download or process voice message")
+        await message.reply_text("I couldn't process that voice message. Please try again.")
+    finally:
+        if audio_path is not None:
+            try:
+                os.remove(audio_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logging.exception("Could not remove temporary voice file")
 
 
 def run_web_server() -> None:
@@ -526,6 +588,7 @@ def main() -> None:
     application.add_handler(CommandHandler("calculate", calculate))
     application.add_handler(CommandHandler("roll", roll))
     application.add_handler(CommandHandler("coin", coin))
+    application.add_handler(MessageHandler(filters.VOICE, transcribe_voice))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, answer_with_ai)
     )
