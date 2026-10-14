@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 from threading import Thread
 
 from flask import Flask
@@ -21,6 +22,12 @@ logging.basicConfig(
 # Create a lightweight Flask app for health checks and keepalive pings.
 web_app = Flask(__name__)
 
+JOKES = [
+    "Why do programmers prefer dark mode? Because light attracts bugs!",
+    "Why was the computer cold? It left its Windows open!",
+    "Why did the developer go broke? Because they used up all their cache!",
+]
+
 
 @web_app.get("/health")
 def health_check():
@@ -31,6 +38,16 @@ def health_check():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reply to the /start command."""
     await update.message.reply_text("Hello! I am your bot. I am working!")
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List the bot's available commands."""
+    await update.message.reply_text("Here is what I can do: /start, /help, /joke")
+
+
+async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with a randomly selected joke."""
+    await update.message.reply_text(random.choice(JOKES))
 
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,6 +73,8 @@ def main() -> None:
 
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("joke", joke))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
     application.run_polling()
 
