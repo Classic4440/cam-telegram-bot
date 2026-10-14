@@ -1,13 +1,19 @@
+import ast
 import asyncio
 import logging
+import math
 import os
+import operator
 import random
 from threading import Thread
+from urllib.parse import quote
 
 from flask import Flask
 from openai import APIError, AsyncOpenAI
+import requests
 from supabase import Client, create_client
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,6 +36,63 @@ JOKES = [
     "Why was the computer cold? It left its Windows open!",
     "Why did the developer go broke? Because they used up all their cache!",
 ]
+
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+
+
+def evaluate_expression(node: ast.expr) -> int | float:
+    """Evaluate a limited arithmetic AST without executing arbitrary code."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        if isinstance(node.value, bool):
+            raise ValueError("Boolean values are not supported")
+        result = node.value
+    elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        value = evaluate_expression(node.operand)
+        result = value if isinstance(node.op, ast.UAdd) else -value
+    elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
+        left = evaluate_expression(node.left)
+        right = evaluate_expression(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > 10:
+            raise ValueError("Exponent must be between -10 and 10")
+        result = _BINARY_OPERATORS[type(node.op)](left, right)
+    else:
+        raise ValueError("Only basic arithmetic is supported")
+
+    if not math.isfinite(result) or abs(result) > 1e100:
+        raise ValueError("The result is too large")
+    return result
+
+
+def fetch_definitions(word: str) -> list[str]:
+    """Fetch up to three English definitions from the free dictionary API."""
+    response = requests.get(
+        f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word, safe='')}",
+        timeout=10,
+    )
+    if response.status_code == 404:
+        raise LookupError(word)
+    response.raise_for_status()
+    entries = response.json()
+    definitions = []
+    for entry in entries:
+        for meaning in entry.get("meanings", []):
+            part_of_speech = meaning.get("partOfSpeech", "")
+            for item in meaning.get("definitions", []):
+                definition = item.get("definition")
+                if definition:
+                    prefix = f"{part_of_speech}: " if part_of_speech else ""
+                    definitions.append(f"{prefix}{definition}")
+                if len(definitions) == 3:
+                    return definitions
+    return definitions
 
 
 def load_recent_messages(client: Client, user_id: int) -> list[dict[str, str]]:
@@ -74,7 +137,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List the bot's available commands."""
-    await update.message.reply_text("Here is what I can do: /start, /help, /joke")
+    await update.message.reply_text(
+        "Here is what I can do: /start, /help, /joke, /image, /weather, "
+        "/summarize, /translate, /define, /calculate, /roll, /coin"
+    )
 
 
 async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -82,10 +148,214 @@ async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(random.choice(JOKES))
 
 
+async def image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate and send an image from a Pollinations prompt."""
+    message = update.message
+    prompt = " ".join(context.args).strip()
+    if message is None:
+        return
+    if not prompt:
+        await message.reply_text("Usage: /image <description>")
+        return
+
+    image_url = f"https://image.pollinations.ai/prompt/{quote(prompt, safe='')}"
+    try:
+        await message.reply_photo(photo=image_url)
+    except TelegramError:
+        logging.exception("Could not send generated image")
+        await message.reply_text("I couldn't generate that image. Please try another prompt.")
+
+
+def fetch_weather(city: str, api_key: str) -> tuple[float, str]:
+    """Fetch current metric weather from OpenWeatherMap."""
+    response = requests.get(
+        "https://api.openweathermap.org/data/2.5/weather",
+        params={"q": city, "appid": api_key, "units": "metric"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    temperature = data["main"]["temp"]
+    description = data["weather"][0]["description"]
+    return temperature, description
+
+
+async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reply with current weather for a city."""
+    message = update.message
+    city = " ".join(context.args).strip()
+    if message is None:
+        return
+    if not city:
+        await message.reply_text("Usage: /weather <city>")
+        return
+
+    api_key = os.environ.get("WEATHER_API_KEY")
+    if not api_key:
+        await message.reply_text("Weather isn't configured yet. Please try again later.")
+        return
+
+    try:
+        temperature, description = await asyncio.to_thread(fetch_weather, city, api_key)
+    except requests.HTTPError as error:
+        status_code = error.response.status_code if error.response is not None else None
+        if status_code == 404:
+            await message.reply_text(f"I couldn't find a city named {city}.")
+        elif status_code == 401:
+            logging.error("OpenWeatherMap rejected WEATHER_API_KEY")
+            await message.reply_text("The weather service is not configured correctly.")
+        else:
+            logging.exception("OpenWeatherMap request failed")
+            await message.reply_text("I couldn't fetch the weather right now. Please try again.")
+        return
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError):
+        logging.exception("Could not retrieve or parse weather for %s", city)
+        await message.reply_text("I couldn't fetch the weather right now. Please try again.")
+        return
+
+    await message.reply_text(f"{city}: {temperature:.1f}°C, {description}.")
+
+
+async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Summarize text with the configured Groq model."""
+    message = update.message
+    text = " ".join(context.args).strip()
+    if message is None:
+        return
+    if not text:
+        await message.reply_text("Usage: /summarize <text>")
+        return
+
+    client: AsyncOpenAI = context.application.bot_data["ai_client"]
+    model = os.environ.get("AI_MODEL", "openai/gpt-oss-20b")
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "Summarize the user's text clearly and concisely."},
+                {"role": "user", "content": text[:12000]},
+            ],
+        )
+        summary = completion.choices[0].message.content
+    except APIError:
+        logging.exception("Groq summarization request failed")
+        await message.reply_text("Sorry, I couldn't summarize that right now. Please try again.")
+        return
+
+    await message.reply_text(summary or "I couldn't generate a summary. Please try again.")
+
+
+async def translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Translate supplied text into the requested language with Groq."""
+    message = update.message
+    if message is None:
+        return
+    if len(context.args) < 2:
+        await message.reply_text("Usage: /translate <language> <text>")
+        return
+
+    language = context.args[0]
+    text = " ".join(context.args[1:])
+    client: AsyncOpenAI = context.application.bot_data["ai_client"]
+    model = os.environ.get("AI_MODEL", "openai/gpt-oss-20b")
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": f"Translate the user's text into {language}. Return only the translation."},
+                {"role": "user", "content": text[:12000]},
+            ],
+        )
+        translation = completion.choices[0].message.content
+    except APIError:
+        logging.exception("Groq translation request failed")
+        await message.reply_text("Sorry, I couldn't translate that right now. Please try again.")
+        return
+
+    await message.reply_text(translation or "I couldn't generate a translation. Please try again.")
+
+
+async def define(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Look up up to three English word definitions."""
+    message = update.message
+    word = " ".join(context.args).strip()
+    if message is None:
+        return
+    if not word:
+        await message.reply_text("Usage: /define <English word>")
+        return
+
+    try:
+        definitions = await asyncio.to_thread(fetch_definitions, word)
+    except LookupError:
+        await message.reply_text(f"I couldn't find a definition for {word}.")
+        return
+    except (requests.RequestException, ValueError, TypeError):
+        logging.exception("Dictionary lookup failed for %s", word)
+        await message.reply_text("I couldn't look that up right now. Please try again.")
+        return
+
+    if not definitions:
+        await message.reply_text(f"No definitions were found for {word}.")
+        return
+    await message.reply_text(f"{word}:\n" + "\n".join(f"- {item}" for item in definitions))
+
+
+async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Evaluate basic arithmetic without running arbitrary Python code."""
+    message = update.message
+    expression = " ".join(context.args).strip()
+    if message is None:
+        return
+    if not expression:
+        await message.reply_text("Usage: /calculate <arithmetic expression>")
+        return
+    if len(expression) > 100:
+        await message.reply_text("Please keep calculations under 100 characters.")
+        return
+
+    try:
+        tree = ast.parse(expression, mode="eval")
+        result = evaluate_expression(tree.body)
+    except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError):
+        await message.reply_text("I couldn't calculate that. Try basic arithmetic like (12 + 3) * 4.")
+        return
+
+    if isinstance(result, float) and result.is_integer():
+        result = int(result)
+    await message.reply_text(f"{expression} = {result}")
+
+
+async def roll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Roll a die with the requested number of sides (defaults to six)."""
+    message = update.message
+    if message is None:
+        return
+    if len(context.args) > 1:
+        await message.reply_text("Usage: /roll [number of sides, 2-1000]")
+        return
+    try:
+        sides = int(context.args[0]) if context.args else 6
+    except ValueError:
+        await message.reply_text("Please provide a whole number of sides from 2 to 1000.")
+        return
+    if not 2 <= sides <= 1000:
+        await message.reply_text("The die must have between 2 and 1000 sides.")
+        return
+
+    await message.reply_text(f"You rolled {random.randint(1, sides)} (d{sides}).")
+
+
+async def coin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Flip a coin."""
+    if update.message is not None:
+        await update.message.reply_text(random.choice(("Heads", "Tails")))
+
+
 async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send the user's text to Groq and reply with the model's response."""
     message = update.message
-    if message is None or message.text is None:
+    if message is None or message.text is None or message.from_user is None:
         return
 
     client: AsyncOpenAI = context.application.bot_data["ai_client"]
@@ -156,6 +426,14 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("joke", joke))
+    application.add_handler(CommandHandler("image", image))
+    application.add_handler(CommandHandler("weather", weather))
+    application.add_handler(CommandHandler("summarize", summarize))
+    application.add_handler(CommandHandler("translate", translate))
+    application.add_handler(CommandHandler("define", define))
+    application.add_handler(CommandHandler("calculate", calculate))
+    application.add_handler(CommandHandler("roll", roll))
+    application.add_handler(CommandHandler("coin", coin))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, answer_with_ai)
     )

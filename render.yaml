@@ -14,3 +14,5 @@ services:
         sync: false
       - key: SUPABASE_KEY
         sync: false
+      - key: WEATHER_API_KEY
+        sync: false
