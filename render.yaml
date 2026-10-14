@@ -10,3 +10,7 @@ services:
         sync: false
       - key: AI_API_KEY
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
