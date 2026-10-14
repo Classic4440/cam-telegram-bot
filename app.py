@@ -1,10 +1,12 @@
 import ast
 import asyncio
+import html
 import logging
 import math
 import os
 import operator
 import random
+import re
 from threading import Thread
 from urllib.parse import quote
 
@@ -13,11 +15,13 @@ from openai import APIError, AsyncOpenAI
 import requests
 from supabase import Client, create_client
 from telegram import Update
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    Defaults,
     MessageHandler,
     filters,
 )
@@ -37,6 +41,12 @@ JOKES = [
     "Why did the developer go broke? Because they used up all their cache!",
 ]
 
+AI_SYSTEM_PROMPT = (
+    "You are a helpful Telegram bot. Keep your answers concise, under 4 paragraphs. "
+    "Do not use markdown tables. Use bullet points for lists. "
+    "Use simple language suitable for a mobile chat screen."
+)
+
 _BINARY_OPERATORS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -46,6 +56,65 @@ _BINARY_OPERATORS = {
     ast.Mod: operator.mod,
     ast.Pow: operator.pow,
 }
+
+
+def markdown_table_to_list(text: str) -> str:
+    """Replace pipe-delimited table rows with plain-text list entries."""
+    if "|" not in text:
+        return text
+
+    lines = text.splitlines()
+    output = []
+    headers = None
+
+    for index, line in enumerate(lines):
+        if "|" not in line:
+            output.append(line)
+            continue
+
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+
+        next_is_separator = (
+            index + 1 < len(lines)
+            and "|" in lines[index + 1]
+            and all(
+                re.fullmatch(r":?-{3,}:?", cell.strip())
+                for cell in lines[index + 1].strip().strip("|").split("|")
+            )
+        )
+        if next_is_separator:
+            headers = cells
+            continue
+
+        if headers:
+            items = [
+                f"{header}: {value}"
+                for header, value in zip(headers, cells)
+                if header and value
+            ]
+            output.append("- " + "; ".join(items))
+        else:
+            output.append("- " + "; ".join(cell for cell in cells if cell))
+
+    return "\n".join(output)
+
+
+def format_ai_response(text: str) -> str:
+    """Convert basic Markdown to safe Telegram HTML."""
+    text = markdown_table_to_list(text)
+    escaped = html.escape(text, quote=False)
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped, flags=re.DOTALL)
+    return re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", escaped)
+
+
+async def reply_with_ai_format(message, text: str) -> None:
+    """Send an AI response using Telegram-safe HTML formatting."""
+    await message.reply_text(
+        format_ai_response(text),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 def evaluate_expression(node: ast.expr) -> int | float:
@@ -200,7 +269,7 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except requests.HTTPError as error:
         status_code = error.response.status_code if error.response is not None else None
         if status_code == 404:
-            await message.reply_text(f"I couldn't find a city named {city}.")
+            await message.reply_text(f"I couldn't find a city named {html.escape(city)}.")
         elif status_code == 401:
             logging.error("OpenWeatherMap rejected WEATHER_API_KEY")
             await message.reply_text("The weather service is not configured correctly.")
@@ -213,7 +282,9 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("I couldn't fetch the weather right now. Please try again.")
         return
 
-    await message.reply_text(f"{city}: {temperature:.1f}°C, {description}.")
+    await message.reply_text(
+        f"{html.escape(city)}: {temperature:.1f}°C, {html.escape(description)}."
+    )
 
 
 async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -232,7 +303,10 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         completion = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "Summarize the user's text clearly and concisely."},
+                {
+                    "role": "system",
+                    "content": AI_SYSTEM_PROMPT + "\n\nSummarize the user's text clearly and concisely.",
+                },
                 {"role": "user", "content": text[:12000]},
             ],
         )
@@ -242,7 +316,9 @@ async def summarize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Sorry, I couldn't summarize that right now. Please try again.")
         return
 
-    await message.reply_text(summary or "I couldn't generate a summary. Please try again.")
+    await reply_with_ai_format(
+        message, summary or "I couldn't generate a summary. Please try again."
+    )
 
 
 async def translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -262,7 +338,11 @@ async def translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         completion = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": f"Translate the user's text into {language}. Return only the translation."},
+                {
+                    "role": "system",
+                    "content": AI_SYSTEM_PROMPT
+                    + f"\n\nTranslate the user's text into {language}. Return only the translation.",
+                },
                 {"role": "user", "content": text[:12000]},
             ],
         )
@@ -272,7 +352,9 @@ async def translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Sorry, I couldn't translate that right now. Please try again.")
         return
 
-    await message.reply_text(translation or "I couldn't generate a translation. Please try again.")
+    await reply_with_ai_format(
+        message, translation or "I couldn't generate a translation. Please try again."
+    )
 
 
 async def define(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -288,7 +370,7 @@ async def define(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         definitions = await asyncio.to_thread(fetch_definitions, word)
     except LookupError:
-        await message.reply_text(f"I couldn't find a definition for {word}.")
+        await message.reply_text(f"I couldn't find a definition for {html.escape(word)}.")
         return
     except (requests.RequestException, ValueError, TypeError):
         logging.exception("Dictionary lookup failed for %s", word)
@@ -298,7 +380,10 @@ async def define(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not definitions:
         await message.reply_text(f"No definitions were found for {word}.")
         return
-    await message.reply_text(f"{word}:\n" + "\n".join(f"- {item}" for item in definitions))
+    await message.reply_text(
+        f"{html.escape(word)}:\n"
+        + "\n".join(f"- {html.escape(item)}" for item in definitions)
+    )
 
 
 async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -372,7 +457,9 @@ async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         completion = await client.chat.completions.create(
             model=model,
-            messages=history + [{"role": "user", "content": message.text}],
+            messages=[{"role": "system", "content": AI_SYSTEM_PROMPT}]
+            + history
+            + [{"role": "user", "content": message.text}],
         )
         response = completion.choices[0].message.content
         response = response or "I couldn't generate a response. Please try again."
@@ -388,7 +475,7 @@ async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         logging.exception("Could not save chat history for user %s", user_id)
 
-    await message.reply_text(response)
+    await reply_with_ai_format(message, response)
 
 
 def run_web_server() -> None:
@@ -420,7 +507,12 @@ def main() -> None:
         base_url="https://api.groq.com/openai/v1",
     )
     supabase_client = create_client(supabase_url, supabase_key)
-    application = Application.builder().token(token).build()
+    application = (
+        Application.builder()
+        .token(token)
+        .defaults(Defaults(parse_mode=ParseMode.HTML))
+        .build()
+    )
     application.bot_data["ai_client"] = ai_client
     application.bot_data["supabase_client"] = supabase_client
     application.add_handler(CommandHandler("start", start))
