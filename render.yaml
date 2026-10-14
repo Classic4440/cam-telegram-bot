@@ -8,3 +8,5 @@ services:
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
+      - key: AI_API_KEY
+        sync: false

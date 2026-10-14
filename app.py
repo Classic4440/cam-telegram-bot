@@ -4,6 +4,7 @@ import random
 from threading import Thread
 
 from flask import Flask
+from openai import APIError, AsyncOpenAI
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -50,10 +51,25 @@ async def joke(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(random.choice(JOKES))
 
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Echo any text message sent by the user."""
-    text = update.message.text or ""
-    await update.message.reply_text(f"You said: {text}")
+async def answer_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the user's text to Groq and reply with the model's response."""
+    message = update.message
+    if message is None or message.text is None:
+        return
+
+    client: AsyncOpenAI = context.application.bot_data["ai_client"]
+    model = os.environ.get("AI_MODEL", "openai/gpt-oss-20b")
+
+    try:
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": message.text}],
+        )
+        response = completion.choices[0].message.content
+        await message.reply_text(response or "I couldn't generate a response. Please try again.")
+    except APIError:
+        logging.exception("Groq API request failed")
+        await message.reply_text("Sorry, I couldn't reach the AI service. Please try again later.")
 
 
 def run_web_server() -> None:
@@ -68,14 +84,25 @@ def main() -> None:
     if not token:
         raise RuntimeError("Set the TELEGRAM_TOKEN environment variable.")
 
+    ai_api_key = os.environ.get("AI_API_KEY")
+    if not ai_api_key:
+        raise RuntimeError("Set the AI_API_KEY environment variable.")
+
     # Render assigns a port dynamically; Flask should listen on it.
     Thread(target=run_web_server, daemon=True).start()
 
+    ai_client = AsyncOpenAI(
+        api_key=ai_api_key,
+        base_url="https://api.groq.com/openai/v1",
+    )
     application = Application.builder().token(token).build()
+    application.bot_data["ai_client"] = ai_client
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("joke", joke))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, answer_with_ai)
+    )
     application.run_polling()
 
 
