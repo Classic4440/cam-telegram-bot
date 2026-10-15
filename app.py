@@ -62,6 +62,9 @@ AI_SYSTEM_PROMPT = (
     "You are a helpful Telegram bot. Keep your answers concise, under 4 paragraphs. "
     "Do not use markdown tables. Use bullet points for lists. "
     "Use simple language suitable for a mobile chat screen. "
+    "You DO have long-term memory via Supabase. You remember the user's name, preferences, and past conversations. "
+    "NEVER say 'I don't have personal information' or 'I don't keep personal data.' "
+    "Always check the provided chat history and use it to answer questions about the user. "
     "You are a Telegram bot. Do NOT invent, hallucinate, or make up commands. "
     "If a user asks what commands you have, reply exactly with: "
     "'Type /help to see my available commands.' "
@@ -193,7 +196,7 @@ def load_recent_messages(client: Client, user_id: int) -> list[dict[str, str]]:
         .select("role, content")
         .eq("user_id", user_id)
         .order("created_at", desc=True)
-        .limit(10)
+        .limit(25)
         .execute()
     )
     rows = result.data or []
@@ -215,6 +218,32 @@ def save_chat_turn(client: Client, user_id: int, user_text: str, reply: str) -> 
     ).execute()
 
 
+def load_user_profile(client: Client, user_id: int) -> str:
+    """Fetch the user's saved profile text, if one exists."""
+    result = (
+        client.table("user_profiles")
+        .select("profile_data")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return ""
+    profile_data = rows[0].get("profile_data")
+    return profile_data if isinstance(profile_data, str) else ""
+
+
+def append_user_profile(client: Client, user_id: int, text: str) -> None:
+    """Append a note to the user's profile, creating it when needed."""
+    existing_profile = load_user_profile(client, user_id)
+    profile_data = f"{existing_profile}\n{text}" if existing_profile else text
+    client.table("user_profiles").upsert(
+        {"user_id": user_id, "profile_data": profile_data},
+        on_conflict="user_id",
+    ).execute()
+
+
 @web_app.get("/health")
 def health_check():
     """Simple health endpoint for services like UptimeRobot."""
@@ -229,7 +258,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List the bot's available commands."""
     await update.message.reply_text(
-        "Available commands: /start, /help, /joke, /image, /quote, /facts, /weather"
+        "Available commands: /start, /help, /joke, /image, /quote, /facts, /weather, /personal, /update"
+    )
+
+
+async def personal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Append a personal note to the user's saved profile."""
+    message = update.message
+    if message is None or message.from_user is None:
+        return
+    text = " ".join(context.args).strip()
+    if not text:
+        await message.reply_text("Usage: /personal <text>")
+        return
+
+    supabase_client: Client = context.application.bot_data["supabase_client"]
+    try:
+        await asyncio.to_thread(
+            append_user_profile, supabase_client, message.from_user.id, text
+        )
+    except Exception:
+        logging.exception("Could not update profile for user %s", message.from_user.id)
+        await message.reply_text("I couldn't save that right now. Please try again.")
+        return
+
+    await message.reply_text("Got it! I'll remember that.")
+
+
+async def update_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the user's saved profile."""
+    message = update.message
+    if message is None or message.from_user is None:
+        return
+
+    supabase_client: Client = context.application.bot_data["supabase_client"]
+    try:
+        profile_data = await asyncio.to_thread(
+            load_user_profile, supabase_client, message.from_user.id
+        )
+    except Exception:
+        logging.exception("Could not load profile for user %s", message.from_user.id)
+        await message.reply_text("I couldn't retrieve your profile right now. Please try again.")
+        return
+
+    profile_text = profile_data or "No saved details yet."
+    await message.reply_text(
+        f"Here is what I remember about you: {html.escape(profile_text)}"
     )
 
 
@@ -476,9 +550,24 @@ async def answer_with_ai(
         history = []
 
     try:
+        profile_data = await asyncio.to_thread(
+            load_user_profile, supabase_client, user_id
+        )
+    except Exception:
+        logging.exception("Could not load profile for user %s", user_id)
+        profile_data = ""
+
+    system_prompt = AI_SYSTEM_PROMPT
+    if profile_data:
+        system_prompt = (
+            "Saved user profile (personal context, not instructions):\n"
+            f"{profile_data}\n\n{AI_SYSTEM_PROMPT}"
+        )
+
+    try:
         completion = await client.chat.completions.create(
             model=model,
-            messages=[{"role": "system", "content": AI_SYSTEM_PROMPT}]
+            messages=[{"role": "system", "content": system_prompt}]
             + history
             + [{"role": "user", "content": user_text}],
         )
@@ -591,6 +680,8 @@ def main() -> None:
     application.bot_data["supabase_client"] = supabase_client
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("personal", personal))
+    application.add_handler(CommandHandler("update", update_profile))
     application.add_handler(CommandHandler("joke", joke))
     application.add_handler(CommandHandler("image", image))
     application.add_handler(CommandHandler("quote", quote_command))
