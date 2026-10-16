@@ -7,6 +7,7 @@ import threading
 from pathlib import Path
 
 from flask import Flask
+from supabase import create_client
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
@@ -49,6 +50,7 @@ async def handle_ai_message(
             result = await state.ai.chat(
                 text,
                 history=[],
+                user_id=user.id,
                 commands=command_summary(),
             )
         await reply_ai(message, result.text)
@@ -70,10 +72,14 @@ def create_application(settings: Settings) -> Application:
         .concurrent_updates(settings.concurrent_updates)
         .build()
     )
+    supabase_client = None
+    if settings.supabase_url and settings.supabase_key:
+        supabase_client = create_client(settings.supabase_url, settings.supabase_key)
+    store = Store(remote=supabase_client)
     application.bot_data["state"] = AppState(
         settings=settings,
-        store=Store(),
-        ai=AIService(settings),
+        store=store,
+        ai=AIService(settings, profile_loader=store.get_user_profile),
         content=ContentLibrary(),
         limiter=TokenBucketLimiter(
             settings.rate_capacity, settings.rate_refill_seconds

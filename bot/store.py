@@ -40,9 +40,18 @@ class MemoryBackend:
         self._ids = itertools.count(1)
         self.history: dict[int, deque[dict[str, str]]] = defaultdict(lambda: deque(maxlen=200))
         self.profiles: dict[int, dict[str, Any]] = {}
+        self.user_profiles: dict[int, str] = {}
         self.todos: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self.notes: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self.reminders: dict[int, dict[str, Any]] = {}
+
+    def get_user_profile(self, user_id: int) -> str | None:
+        with self._lock:
+            return self.user_profiles.get(user_id)
+
+    def save_user_profile(self, user_id: int, text: str) -> None:
+        with self._lock:
+            self.user_profiles[user_id] = text
 
     # history -------------------------------------------------------------------------
     def load_history(self, user_id: int, limit: int) -> list[dict[str, str]]:
@@ -201,6 +210,36 @@ class Store:
         self._xp: dict[int, int] = defaultdict(int)
         self._names: dict[int, str] = {}
         self._xp_lock = threading.Lock()
+
+    def get_user_profile(self, user_id: int) -> str | None:
+        if self.remote is None:
+            return self.local.get_user_profile(user_id)
+
+        response = (
+            self.remote.table("user_profiles")
+            .select("profile_data")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return None
+        profile_data = rows[0].get("profile_data")
+        return profile_data if isinstance(profile_data, str) else None
+
+    def save_user_profile(self, user_id: int, text: str) -> None:
+        existing_profile = self.get_user_profile(user_id)
+        profile_data = f"{existing_profile}\n{text}" if existing_profile else text
+
+        if self.remote is None:
+            self.local.save_user_profile(user_id, profile_data)
+            return
+
+        self.remote.table("user_profiles").upsert(
+            {"user_id": user_id, "profile_data": profile_data},
+            on_conflict="user_id",
+        ).execute()
 
     @property
     def durable(self) -> bool:
