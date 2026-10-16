@@ -1,9 +1,13 @@
-"""Flask health endpoint and Telegram bot entry point."""
+"""Main Telegram bot application entry point."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import signal
+import sys
 import threading
+from contextlib import suppress
 from pathlib import Path
 
 from flask import Flask
@@ -15,6 +19,7 @@ from bot.config import Settings
 from bot.content import ContentLibrary
 from bot.errors import AIUnavailable
 from bot.formatting import reply_ai
+from bot.logging_setup import setup_logging
 from bot.registry import build_handlers, command_summary, discover
 from bot.security import TokenBucketLimiter, sanitize_text
 from bot.state import AppState
@@ -46,11 +51,12 @@ async def handle_ai_message(
     state.stats.ai_chats += 1
     try:
         async with state.user_lock(user.id):
+            history = await state.store.load_history(
+                user.id, state.settings.history_messages
+            )
             result = await state.ai.chat(
                 text,
-                history=await state.store.load_history(
-                    user.id, state.settings.history_messages
-                ),
+                history=history,
                 user_id=user.id,
                 commands=command_summary(),
             )
@@ -68,14 +74,8 @@ async def handle_ai_message(
 
 
 def create_application(settings: Settings) -> Application:
-    application = (
-        Application.builder()
-        .token(settings.telegram_token)
-        .concurrent_updates(settings.concurrent_updates)
-        .build()
-    )
     store = build_store(settings.supabase_url, settings.supabase_key)
-    application.bot_data["state"] = AppState(
+    app_state = AppState(
         settings=settings,
         store=store,
         ai=AIService(settings, profile_loader=store.get_user_profile),
@@ -84,27 +84,31 @@ def create_application(settings: Settings) -> Application:
             settings.rate_capacity, settings.rate_refill_seconds
         ),
     )
+    application = (
+        Application.builder()
+        .token(settings.telegram_token)
+        .concurrent_updates(settings.concurrent_updates)
+        .build()
+    )
+    application.bot_data["state"] = app_state
+    application.bot_data["store"] = store
+    application.bot_data["config"] = settings
 
     commands_dir = Path(__file__).resolve().parent / "bot" / "commands"
     command_modules = (
-        [path for path in commands_dir.glob("*.py") if not path.name.startswith("_")]
+        [
+            path
+            for path in commands_dir.glob("*.py")
+            if not path.name.startswith("_")
+        ]
         if commands_dir.is_dir()
         else []
     )
     if command_modules:
-        try:
-            loaded = discover()
-        except ModuleNotFoundError as exc:
-            if exc.name and (
-                exc.name == "bot.commands" or exc.name.startswith("bot.services")
-            ):
-                logger.warning("Skipping unavailable optional bot module %s", exc.name)
-            else:
-                raise
-        else:
-            logger.info("Discovered command modules: %s", ", ".join(loaded))
+        loaded = discover()
+        logger.info("Discovered command modules: %s", ", ".join(loaded))
     else:
-        logger.info("No command modules found; starting without registered commands")
+        logger.info("No command modules found")
 
     application.add_handlers(build_handlers())
     application.add_handler(
@@ -113,25 +117,55 @@ def create_application(settings: Settings) -> Application:
     return application
 
 
-def run_telegram_bot(application: Application) -> None:
-    application.run_polling(stop_signals=None)
-
-
-def main() -> None:
-    settings = Settings.from_env()
-    application = create_application(settings)
-    telegram_thread = threading.Thread(
-        target=run_telegram_bot,
-        args=(application,),
-        name="telegram-bot",
-        daemon=True,
-    )
-    telegram_thread.start()
-
-    port = int(os.environ.get("PORT", 10000))
+def run_health_server() -> None:
+    port = int(os.environ.get("PORT", "10000"))
     web_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 
+async def main() -> None:
+    setup_logging()
+    try:
+        settings = Settings.from_env()
+    except RuntimeError as exc:
+        logger.critical("Configuration error: %s", exc)
+        raise SystemExit(1) from exc
+
+    logger.info("=== Telegram Bot Starting ===")
+    application = create_application(settings)
+    threading.Thread(
+        target=run_health_server,
+        name="health-server",
+        daemon=True,
+    ).start()
+
+    loop = asyncio.get_running_loop()
+    shutdown_requested = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with suppress(NotImplementedError):
+            loop.add_signal_handler(sig, shutdown_requested.set)
+
+    async with application:
+        await application.start()
+        if application.updater is None:
+            raise RuntimeError("Telegram Application has no updater")
+        await application.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES
+        )
+        logger.info("Bot is running")
+        await shutdown_requested.wait()
+
+        logger.info("Shutdown requested")
+        if application.updater.running:
+            await application.updater.stop()
+        if application.running:
+            await application.stop()
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception:
+        logger.exception("Fatal application error")
+        sys.exit(1)

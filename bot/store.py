@@ -40,6 +40,7 @@ class MemoryBackend:
         self._ids = itertools.count(1)
         self.history: dict[int, deque[dict[str, str]]] = defaultdict(lambda: deque(maxlen=200))
         self.profiles: dict[int, dict[str, Any]] = {}
+        self.user_profiles: dict[int, str] = {}
         self.todos: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self.notes: dict[int, list[dict[str, Any]]] = defaultdict(list)
         self.reminders: dict[int, dict[str, Any]] = {}
@@ -57,6 +58,14 @@ class MemoryBackend:
     def clear_history(self, user_id: int) -> None:
         with self._lock:
             self.history.pop(user_id, None)
+
+    def get_user_profile(self, user_id: int) -> str | None:
+        with self._lock:
+            return self.user_profiles.get(user_id)
+
+    def set_user_profile(self, user_id: int, text: str) -> None:
+        with self._lock:
+            self.user_profiles[user_id] = text
 
     # profiles ------------------------------------------------------------------------
     def get_profile(self, user_id: int) -> dict[str, Any] | None:
@@ -208,6 +217,27 @@ class SupabaseBackend:
     def clear_history(self, user_id: int) -> None:
         self._t("chat_history").delete().eq("user_id", user_id).execute()
 
+    def get_user_profile(self, user_id: int) -> str | None:
+        rows = (
+            self._t("user_profiles")
+            .select("profile_data")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return None
+        profile_data = rows[0].get("profile_data")
+        return profile_data if isinstance(profile_data, str) else None
+
+    def set_user_profile(self, user_id: int, text: str) -> None:
+        self._t("user_profiles").upsert(
+            {"user_id": user_id, "profile_data": text},
+            on_conflict="user_id",
+        ).execute()
+
     # profiles ------------------------------------------------------------------------
     def get_profile(self, user_id: int) -> dict[str, Any] | None:
         rows = self._t("profiles").select("*").eq("user_id", user_id).limit(1).execute().data or []
@@ -350,6 +380,15 @@ class Store:
         await self._call("clear_history", user_id)
 
     # profile + xp
+    async def get_user_profile(self, user_id: int) -> str | None:
+        return await self._call("get_user_profile", user_id)
+
+    async def save_user_profile(self, user_id: int, text: str) -> None:
+        existing = await self.get_user_profile(user_id)
+        profile_data = f"{existing}\n{text}" if existing else text
+        await self._call("set_user_profile", user_id, profile_data)
+        self.local.set_user_profile(user_id, profile_data)
+
     def add_xp(self, user_id: int, username: str | None, amount: int) -> None:
         """Buffered in memory (cheap, sync); flushed periodically by ``flush_xp``."""
         with self._xp_lock:
