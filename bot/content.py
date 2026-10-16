@@ -1,4 +1,4 @@
-"""Content library: loads JSON packs, serves without immediate repeats. [155 lines]
+"""Content library: loads every JSON pack in ``bot/data`` and serves it without immediate repeats.
 
 Pack format (one file per kind; ``<kind>.json`` and/or ``<kind>.generated.json``)::
 
@@ -29,7 +29,6 @@ _PACK_NAME = re.compile(r"^(?P<kind>[a-z0-9_]+)(?:\.[a-z0-9_]+)?\.json$")
 
 
 def _fingerprint(entry: Any) -> str:
-    """Case-insensitive, whitespace-normalized fingerprint for de-duping."""
     if isinstance(entry, str):
         return re.sub(r"\W+", " ", entry.lower()).strip()
     if isinstance(entry, dict):
@@ -48,7 +47,6 @@ class ContentLibrary:
 
     # ---------------------------------------------------------------- loading
     def load(self) -> dict[str, int]:
-        """Load all *.json packs from data_dir, merge, de-dup, and return counts."""
         packs: dict[str, dict[str, list[Any]]] = {}
         seen: dict[str, set[str]] = {}
         files = sorted(self.data_dir.glob("*.json"))
@@ -89,27 +87,22 @@ class ContentLibrary:
 
     # ---------------------------------------------------------------- queries
     def kinds(self) -> list[str]:
-        """Sorted list of all content kinds (jokes, quotes, etc.)."""
         return sorted(self._packs)
 
     def categories(self, kind: str) -> list[str]:
-        """Sorted categories within a kind."""
         return sorted(self._packs.get(kind, {}))
 
     def counts(self) -> dict[str, int]:
-        """Total entry count per kind."""
         return {kind: sum(len(v) for v in cats.values()) for kind, cats in self._packs.items()}
 
     def total(self) -> int:
-        """Total entries across all kinds."""
         return sum(self.counts().values())
 
     def category_counts(self, kind: str) -> dict[str, int]:
-        """Entry count per category within a kind."""
         return {cat: len(items) for cat, items in self._packs.get(kind, {}).items()}
 
     def resolve_category(self, kind: str, wanted: str | None) -> str | None:
-        """Map user input to a category: exact → prefix → substring."""
+        """Map a user supplied word to a category (exact, then unique prefix, then substring)."""
         if not wanted:
             return None
         wanted = wanted.lower().strip()
@@ -123,7 +116,6 @@ class ContentLibrary:
         return None
 
     def pool(self, kind: str, category: str | None = None) -> list[Any]:
-        """All entries for a kind (all categories if category=None)."""
         cats = self._packs.get(kind, {})
         if category:
             return cats.get(category, [])
@@ -133,7 +125,7 @@ class ContentLibrary:
         return merged
 
     def pick(self, kind: str, category: str | None = None, scope: Any = None) -> Any | None:
-        """Random entry without repeating per scope until deck exhausted. LRU deck per (scope, kind, category)."""
+        """Random entry without repeating until the deck is exhausted for ``scope`` (e.g. chat id)."""
         pool = self.pool(kind, category)
         if not pool:
             return None
@@ -151,12 +143,10 @@ class ContentLibrary:
         return pool[index % len(pool)]
 
     def sample(self, kind: str, n: int, category: str | None = None) -> list[Any]:
-        """Random sample of n entries without replacement."""
         pool = self.pool(kind, category)
         return self._rng.sample(pool, min(n, len(pool)))
 
     def search(self, kind: str, term: str, limit: int = 5) -> list[Any]:
-        """Full-text search across a kind, return shuffled top-N."""
         term = term.lower().strip()
         if not term:
             return []

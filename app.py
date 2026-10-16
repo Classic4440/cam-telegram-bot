@@ -7,7 +7,6 @@ import threading
 from pathlib import Path
 
 from flask import Flask
-from supabase import create_client
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
@@ -19,7 +18,7 @@ from bot.formatting import reply_ai
 from bot.registry import build_handlers, command_summary, discover
 from bot.security import TokenBucketLimiter, sanitize_text
 from bot.state import AppState
-from bot.store import Store
+from bot.store import build_store
 
 logger = logging.getLogger(__name__)
 web_app = Flask(__name__)
@@ -49,10 +48,13 @@ async def handle_ai_message(
         async with state.user_lock(user.id):
             result = await state.ai.chat(
                 text,
-                history=[],
+                history=await state.store.load_history(
+                    user.id, state.settings.history_messages
+                ),
                 user_id=user.id,
                 commands=command_summary(),
             )
+            await state.store.save_turn(user.id, text, result.text)
         await reply_ai(message, result.text)
     except AIUnavailable:
         logger.exception("AI service is unavailable")
@@ -72,10 +74,7 @@ def create_application(settings: Settings) -> Application:
         .concurrent_updates(settings.concurrent_updates)
         .build()
     )
-    supabase_client = None
-    if settings.supabase_url and settings.supabase_key:
-        supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-    store = Store(remote=supabase_client)
+    store = build_store(settings.supabase_url, settings.supabase_key)
     application.bot_data["state"] = AppState(
         settings=settings,
         store=store,
