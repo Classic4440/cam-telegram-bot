@@ -90,7 +90,8 @@ in a committed `.env` file.
 
 The test files and generator are Python code blocks in Markdown transfer files.
 Extract each block to a temporary `.py` file before running it; do not commit
-generated `.py` copies. Test categories:
+generated `.py` copies. Install the test runner with
+`pip install -r requirements-dev.txt`. Test categories:
 - Content generation (text, data, templates)
 - Mutation testing (27/27 mutations caught)
 - Service smoke tests
