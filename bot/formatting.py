@@ -169,6 +169,19 @@ async def reply_ai(message, markdown: str, **kwargs):
     return sent
 
 
+async def safe_reply(update, text: str, **kwargs):
+    """Reply to an update using the project's safe Markdown-to-HTML sender."""
+    message = update.effective_message
+    if message is None:
+        return None
+    return await reply_ai(message, text, **kwargs)
+
+
+def code_block(text: str) -> str:
+    """Wrap plain text in a Markdown code fence for safe Telegram rendering."""
+    return f"```\n{text}\n```"
+
+
 @asynccontextmanager
 async def typing_indicator(message, action: str = ChatAction.TYPING) -> AsyncIterator[None]:
     """Keep the "typing…" indicator alive while a slow operation runs."""

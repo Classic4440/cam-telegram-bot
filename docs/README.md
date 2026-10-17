@@ -8,7 +8,7 @@ A comprehensive, production-grade Telegram bot framework with extensive content 
 cam-telegram-bot/
 ├── bot/                          # Core bot framework
 │   ├── __init__.py              # Package initialization
-│   ├── config.py                # Environment config (typed dataclass)
+│   ├── config.py                # Typed environment configuration
 │   ├── errors.py                # Custom exception types
 │   ├── cache.py                 # Thread-safe TTL cache with LRU eviction
 │   ├── logging_setup.py         # Logging with secret redaction
@@ -19,6 +19,9 @@ cam-telegram-bot/
 │   ├── content.py               # Content library loader & selection
 │   ├── ai.py                    # AI service (12 personas, intent routing)
 │   ├── registry.py              # Decorator-based command registry
+│   ├── commands/                # Auto-discovered Telegram commands
+│   ├── handlers/                # Text and media update handlers
+│   ├── utils/                   # Media processing helpers
 │   └── services/                # Business logic modules
 │       ├── __init__.py
 │       ├── dice.py              # Dice notation roller (2d6+3, d20, etc)
@@ -30,12 +33,18 @@ cam-telegram-bot/
 │       ├── textcodec.py         # rot13, base64, morse, ciphers
 │       ├── timeparse.py         # Natural language time parsing
 │       └── units.py             # Unit conversion (length, mass, volume, etc)
+├── app.py                        # Telegram polling application entry point
 ├── scripts/                      # Content generation & utilities
 │   ├── curated_jokes.py         # Hand-written jokes (~1,500+ entries)
 │   ├── curated_quotes_facts.py  # Quotes & facts (~1,000+ entries)
 │   ├── curated_games.py         # Riddles, trivia, tongue twisters (~500+ entries)
-│   └── generate_content.md      # Content generator source (extract to .py)
-├── tests/                        # Test suites (490 tests passing)
+│   ├── generate_content.md      # Content generator source
+│   └── generate_content.py      # Executable content generator
+├── tests/                        # 493 executable tests and readable Markdown sources
+│   ├── test_memory.py           # Profile persistence and prompt injection
+│   ├── test_generate_content.py
+│   ├── test_generate_content_data.py
+│   ├── test_generate_content_text.py
 │   ├── test_generate_content.md
 │   ├── test_generate_content_data.md
 │   └── test_generate_content_text.md
@@ -45,6 +54,7 @@ cam-telegram-bot/
 │   ├── Current_Status_and_Architecture.md
 │   └── services_and_curated_full.md
 └── supabase/                     # Supabase RLS policies & migrations
+    └── user_profiles.sql        # Long-term memory profile table
 ```
 
 ## Key Features
@@ -82,19 +92,25 @@ cam-telegram-bot/
 
 ## Configuration
 
-Set `TELEGRAM_TOKEN` and `AI_API_KEY` in the host's environment settings. Set
-`SUPABASE_URL` and `SUPABASE_KEY` to enable durable storage. Do not put secrets
-in a committed `.env` file.
+Set environment variables:
+```bash
+TELEGRAM_TOKEN=your_bot_token
+AI_API_KEY=your_groq_key
+SUPABASE_URL=optional
+SUPABASE_KEY=optional
+```
+
+The bot reads credentials directly from the process environment; do not commit a `.env` file. Configure
+the profile table by applying `supabase/user_profiles.sql` in Supabase. For durable server-side access,
+`SUPABASE_KEY` must be a server key permitted to bypass row-level security.
+
+`/personal <information>` saves a user's profile and `/update` displays it. The profile is also included
+in the system prompt for AI chat and AI tasks.
 
 ## Testing
 
-The test files and generator are Python code blocks in Markdown transfer files.
-Extract each block to a temporary `.py` file before running it; do not commit
-generated `.py` copies. Install the test runner with
-`pip install -r requirements-dev.txt`. Test categories:
-- Content generation (text, data, templates)
-- Mutation testing (27/27 mutations caught)
-- Service smoke tests
+Run `python -m pytest tests/` for all 493 tests. The three Markdown test files are the readable source
+copies for the generated Python test suites.
 
 ## Development Notes
 
@@ -106,11 +122,9 @@ generated `.py` copies. Install the test runner with
 
 ## Next Steps
 
-1. Extract `scripts/generate_content.md` to a temporary Python file.
-2. Extract each `tests/test_*.md` Python block to a temporary test file and run
-   those files with pytest.
-3. Configure API keys through the host's environment settings.
-4. Deploy with Flask + waitress or docker
+1. Run `python -m pytest tests/`.
+2. Set the required environment variables (`TELEGRAM_TOKEN`, `AI_API_KEY`) and optional Supabase settings.
+3. Run `python app.py` to start Telegram polling and the `/health` endpoint on `PORT` (default `10000`).
 
 ---
 

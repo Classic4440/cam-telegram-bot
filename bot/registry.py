@@ -90,6 +90,15 @@ def command(
     return decorator
 
 
+def register(name: str) -> Callable[[Handler], Handler]:
+    """Compatibility decorator for Phase 4 command modules."""
+    def decorator(func: Handler) -> Handler:
+        description = (func.__doc__ or f"Run the /{name} command").strip()
+        return command(name, description=description)(func)
+
+    return decorator
+
+
 def callback(prefix: str) -> Callable[[Handler], Handler]:
     """Register an inline-keyboard handler for ``callback_data`` of the form ``"<prefix>:<payload>"``."""
     if ":" in prefix or not prefix:

@@ -97,7 +97,7 @@ async def translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             commands=command_summary(),
         )
     except AIUnavailable:
-        logger.exception("AI translation service is unavailable")
+        logger.warning("AI translation service is unavailable")
         await reply_ai(message, "Translation is unavailable right now. Please try again shortly.")
         return
     await reply_ai(message, result)

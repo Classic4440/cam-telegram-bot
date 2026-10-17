@@ -1,1 +1,1 @@
-"""Command modules auto-discovered by :mod:`bot.registry`."""
+"""Commands are loaded by :func:`bot.registry.discover`."""

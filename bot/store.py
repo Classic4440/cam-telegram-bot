@@ -59,14 +59,6 @@ class MemoryBackend:
         with self._lock:
             self.history.pop(user_id, None)
 
-    def get_user_profile(self, user_id: int) -> str | None:
-        with self._lock:
-            return self.user_profiles.get(user_id)
-
-    def set_user_profile(self, user_id: int, text: str) -> None:
-        with self._lock:
-            self.user_profiles[user_id] = text
-
     # profiles ------------------------------------------------------------------------
     def get_profile(self, user_id: int) -> dict[str, Any] | None:
         with self._lock:
@@ -77,6 +69,14 @@ class MemoryBackend:
         with self._lock:
             profile = self.profiles.setdefault(user_id, {"user_id": user_id, "xp": 0, "persona": "default"})
             profile.update({k: v for k, v in fields.items() if v is not None})
+
+    def get_user_profile(self, user_id: int) -> str:
+        with self._lock:
+            return self.user_profiles.get(user_id, "")
+
+    def save_user_profile(self, user_id: int, text: str) -> None:
+        with self._lock:
+            self.user_profiles[user_id] = text
 
     def flush_xp(self, deltas: dict[int, int], names: dict[int, str]) -> None:
         with self._lock:
@@ -217,7 +217,16 @@ class SupabaseBackend:
     def clear_history(self, user_id: int) -> None:
         self._t("chat_history").delete().eq("user_id", user_id).execute()
 
-    def get_user_profile(self, user_id: int) -> str | None:
+    # profiles ------------------------------------------------------------------------
+    def get_profile(self, user_id: int) -> dict[str, Any] | None:
+        rows = self._t("profiles").select("*").eq("user_id", user_id).limit(1).execute().data or []
+        return rows[0] if rows else None
+
+    def upsert_profile(self, user_id: int, **fields: Any) -> None:
+        payload = {"user_id": user_id, **{k: v for k, v in fields.items() if v is not None}}
+        self._t("profiles").upsert(payload, on_conflict="user_id").execute()
+
+    def get_user_profile(self, user_id: int) -> str:
         rows = (
             self._t("user_profiles")
             .select("profile_data")
@@ -227,25 +236,13 @@ class SupabaseBackend:
             .data
             or []
         )
-        if not rows:
-            return None
-        profile_data = rows[0].get("profile_data")
-        return profile_data if isinstance(profile_data, str) else None
+        profile_data = rows[0].get("profile_data", "") if rows else ""
+        return profile_data if isinstance(profile_data, str) else ""
 
-    def set_user_profile(self, user_id: int, text: str) -> None:
+    def save_user_profile(self, user_id: int, text: str) -> None:
         self._t("user_profiles").upsert(
-            {"user_id": user_id, "profile_data": text},
-            on_conflict="user_id",
+            {"user_id": user_id, "profile_data": text}, on_conflict="user_id"
         ).execute()
-
-    # profiles ------------------------------------------------------------------------
-    def get_profile(self, user_id: int) -> dict[str, Any] | None:
-        rows = self._t("profiles").select("*").eq("user_id", user_id).limit(1).execute().data or []
-        return rows[0] if rows else None
-
-    def upsert_profile(self, user_id: int, **fields: Any) -> None:
-        payload = {"user_id": user_id, **{k: v for k, v in fields.items() if v is not None}}
-        self._t("profiles").upsert(payload, on_conflict="user_id").execute()
 
     def flush_xp(self, deltas: dict[int, int], names: dict[int, str]) -> None:
         for user_id, amount in deltas.items():
@@ -380,15 +377,6 @@ class Store:
         await self._call("clear_history", user_id)
 
     # profile + xp
-    async def get_user_profile(self, user_id: int) -> str | None:
-        return await self._call("get_user_profile", user_id)
-
-    async def save_user_profile(self, user_id: int, text: str) -> None:
-        existing = await self.get_user_profile(user_id)
-        profile_data = f"{existing}\n{text}" if existing else text
-        await self._call("set_user_profile", user_id, profile_data)
-        self.local.set_user_profile(user_id, profile_data)
-
     def add_xp(self, user_id: int, username: str | None, amount: int) -> None:
         """Buffered in memory (cheap, sync); flushed periodically by ``flush_xp``."""
         with self._xp_lock:
@@ -419,6 +407,12 @@ class Store:
         profile.setdefault("persona", "default")
         profile["persona"] = profile.get("persona") or "default"
         return profile
+
+    async def get_user_profile(self, user_id: int) -> str:
+        return await self._call("get_user_profile", user_id)
+
+    async def save_user_profile(self, user_id: int, text: str) -> None:
+        await self._call("save_user_profile", user_id, text)
 
     async def set_persona(self, user_id: int, persona: str) -> None:
         await self._call("upsert_profile", user_id, persona=persona)

@@ -28,6 +28,7 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
 - **Model Fallback Chain**: Groq (primary) → local fallback.
 - **Retry & Jitter**: 3 retries, exponential backoff + random jitter.
 - **History Trimming**: keep recent context under token limits.
+- **Long-term memory**: profile data from `user_profiles` is included in chat and task prompts.
 - **Log Redaction**: mask sensitive data (API keys, user IDs).
 
 #### 3. **Store Facade** (`bot/store.py`)
@@ -35,6 +36,7 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
 - **Circuit Breaker**: failover to in-memory cache on outage.
 - **Caching Layer** (`bot/cache.py`): local in-memory with TTL.
 - **Security**: RLS policies, prepared statements, least privilege.
+- **User profiles**: `/personal` and `/update` persist profile data in Supabase with an in-memory fallback.
 
 #### 4. **Content System** (`bot/content.py`)
 - Loads curated (`<kind>.json`) and generated (`<kind>.generated.json`) content.
@@ -139,7 +141,8 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 - ✅ 49 Stage 1 tests (core I/O, validation, fingerprinting)
 - ✅ 163 Stage 2 tests (data completeness, country capitals, elements)
 - ✅ 278 Stage 3 tests (template generators, lint, determinism, de-dup)
-- ✅ **Total: 490 tests passed**
+- ✅ 3 memory regression tests cover profile commands, store round-trip, and AI prompt injection
+- ✅ **Total: 493 executable tests**
 - ✅ **Mutation tests: 27/27 caught** (high code quality)
 
 **Curated Files**:
@@ -155,17 +158,15 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 
 ## What's NOT Yet Built
 
-### Critical Path (Blocking Bot Boot)
-- ❌ `bot/commands/` — command implementations
-- ❌ `app.py` — Flask/waitress entry point, Telegram webhook handler, reminders, XP flush
-- ❌ `supabase/schema.sql` — database schema, RLS policies
-- ❌ `requirements.txt` — frozen dependency list
-- ❌ `render.yaml` — deployment config
-- ❌ `.env.example` — environment template
-- ❌ `README.md` — user-facing documentation
+### Completed Deployment Requirements
+- ✅ `bot/commands/` — auto-discovered command implementations, including `/personal` and `/update`
+- ✅ `app.py` — Telegram polling entry point with media and text handlers
+- ✅ `supabase/user_profiles.sql` — long-term memory table with row-level security enabled
+- ✅ `requirements.txt` — runtime dependencies
+- ✅ `render.yaml` — deployment config
 
 ### Optional Enhancements
-- Voice message handler (audio transcription + response)
+- Production voice/audio transcription and text-to-speech providers
 - Web dashboard (bot stats, user analytics)
 - Advanced game logic (multiplayer, scoring, leaderboards)
 
@@ -174,13 +175,10 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 1. **Stage 4**: Implement computed generators (trivia from Stage 2, element facts, math facts).
 2. **Stage 5**: Curated pass-through builder + Stage 1/2 test updates.
 3. **Stage 6**: Strict per-kind validation; real run to `bot/data`; loader round-trip verification.
-4. **Bot Commands**: Implement command handlers in `bot/commands/`.
-5. **App Entry**: Write `app.py` with Flask/waitress, Telegram webhook, job queue.
-6. **Database**: Schema, RLS policies, migrations.
-7. **Deployment**: `requirements.txt`, `render.yaml`, CI/CD.
+4. **Database**: Apply `supabase/user_profiles.sql` to enable durable user memory.
+5. **Deployment**: Inject `TELEGRAM_TOKEN`, `AI_API_KEY`, and optional Supabase credentials as environment secrets.
 
 ---
 
-**Status**: Content generation 50% complete (Stages 1–3 done; bot structure modular but not yet bootable).  
-**Last Updated**: 2026-10-16  
+**Status**: Content generation stages 1–3 complete; modular polling bot and profile memory implemented.
 **Maintainer**: DanielMac (marklikyfc@gmail.com)
