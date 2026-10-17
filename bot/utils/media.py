@@ -42,21 +42,6 @@ async def download_file(context: ContextTypes.DEFAULT_TYPE, file_id: str, file_t
         raise MediaError(f"Failed to download file: {e}") from None
 
 
-async def transcribe_audio(file_path: Path, api_key: str | None = None) -> str:
-    """Transcribe audio to text using Groq (or fallback to dummy transcription)."""
-    if not api_key:
-        logger.warning("No API key for transcription, returning dummy text")
-        return "[Transcription unavailable - configure AI_API_KEY]"
-
-    try:
-        # This is a placeholder - implement with Groq speech-to-text API
-        logger.info(f"Transcribing audio: {file_path}")
-        return "[Audio transcription coming soon]"
-    except Exception as e:
-        logger.exception(f"Transcription failed: {e}")
-        return f"[Transcription error: {str(e)[:50]}]"
-
-
 async def text_to_speech(text: str, api_key: str | None = None) -> Path | None:
     """Convert text to speech, return audio file path."""
     if not api_key:
