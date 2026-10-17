@@ -29,7 +29,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("📸 Processing image...")
 
         # Download image
-        local_path = await download_file(update, photo.file_id, "jpg")
+        local_path = await download_file(context, photo.file_id, "jpg")
 
         # Process (resize)
         processed_path, original_info = process_image(local_path)
@@ -63,7 +63,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Download audio
         audio_type = audio.mime_type.rsplit("/", 1)[-1] if audio.mime_type else "ogg"
-        local_path = await download_file(update, audio.file_id, audio_type)
+        local_path = await download_file(context, audio.file_id, audio_type)
 
         # Transcribe
         config = context.bot_data.get("config") if context.bot_data else None
@@ -90,7 +90,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("🎙️ Processing voice message...")
 
         # Download voice
-        local_path = await download_file(update, voice.file_id, "ogg")
+        local_path = await download_file(context, voice.file_id, "ogg")
 
         # Transcribe
         config = context.bot_data.get("config") if context.bot_data else None

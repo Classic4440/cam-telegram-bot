@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from PIL import Image
-from telegram import Update
+from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +23,10 @@ class MediaError(ValueError):
     pass
 
 
-async def download_file(update: Update, file_id: str, file_type: str) -> Path:
+async def download_file(context: ContextTypes.DEFAULT_TYPE, file_id: str, file_type: str) -> Path:
     """Download file from Telegram, return local path."""
     try:
-        file = await update.bot.get_file(file_id)
+        file = await context.bot.get_file(file_id)
         if file.file_size and file.file_size > MAX_FILE_SIZE:
             raise MediaError(f"File too large ({file.file_size} bytes, max {MAX_FILE_SIZE})")
 
