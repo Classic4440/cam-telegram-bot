@@ -64,6 +64,7 @@ Send voice - Voice message transcription + TTS reply
 **Info:**
 /start - This message
 /help - Commands (this message)
+/version - Bot version and release notes
 /stats - Bot statistics
 /admin - Admin panel
 
