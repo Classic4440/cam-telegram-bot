@@ -11,18 +11,18 @@ from bot.registry import register
 
 logger = logging.getLogger(__name__)
 
-ADMIN_IDS = set()  # Configure with env var
-
-
-def is_admin(user_id: int) -> bool:
+def is_admin(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if user is admin."""
-    return user_id in ADMIN_IDS
+    state = context.bot_data.get("state")
+    settings = getattr(state, "settings", None)
+    return settings is not None and user_id in settings.admin_ids
 
 
 @register("admin")
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Admin panel."""
-    if not is_admin(update.effective_user.id):
+    user = update.effective_user
+    if user is None or not is_admin(user.id, context):
         await safe_reply(update, "❌ Admin only")
         return
 
@@ -64,7 +64,8 @@ Total entries: {stats['content_total']}
 @register("reload")
 async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Reload content library."""
-    if not is_admin(update.effective_user.id):
+    user = update.effective_user
+    if user is None or not is_admin(user.id, context):
         await safe_reply(update, "❌ Admin only")
         return
 

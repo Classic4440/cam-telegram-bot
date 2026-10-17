@@ -15,8 +15,7 @@ Design rules
 * Atomic: files are written to a temp file in the same directory, fsynced, then ``os.replace``d, so a
   crash can never leave a half-written pack (and the temp name never matches the loader's ``*.json``).
 * Strict: output is validated before anything is written; any error aborts with a non-zero exit code.
-* Curated wins: generated entries that duplicate curated ones are removed here, because the runtime
-  loader reads ``*.generated.json`` first and would otherwise keep the generated copy.
+* Curated wins: generated entries that duplicate curated ones are removed before writing.
 """
 from __future__ import annotations
 
@@ -1043,9 +1042,141 @@ TEXT_GENERATORS: dict[str, Callable[[random.Random, int], dict[str, list[str]]]]
 
 
 # ======================================================================================
-# STAGES 4-6 GO HERE: computed generators, curated pass-through, per-kind validation.
-# Each generator is registered with @builder("name") and returns {file_stem: payload}.
+# STAGES 4-6: computed content, curated pass-through, validation, and output.
 # ======================================================================================
+
+PIPELINE_CAPS = {
+    "jokes": 94,
+    "quotes": 7,
+    "compliments": 5,
+    "fortunes": 4,
+    "would_you_rather": 10,
+}
+
+_MATH_FACTS = (
+    "Pi is irrational.",
+    "The square root of two is irrational.",
+    "The Fibonacci sequence appears in many natural patterns.",
+    "Prime numbers are used in modern cryptography.",
+    "The real numbers are uncountably infinite.",
+)
+
+
+def _computed_trivia(rng: random.Random) -> Payload:
+    geography = [
+        {"q": f"What is the capital of {country.name}?", "a": country.capital}
+        for country in stable_pick(rng, quiz_countries(), 10)
+    ]
+    chemistry = [
+        {"q": f"What is the chemical symbol for {element.name}?", "a": element.symbol}
+        for element in stable_pick(rng, ELEMENTS, 10)
+    ]
+    math = [
+        {"q": question, "a": answer}
+        for question, answer in (
+            ("Is pi rational or irrational?", "Pi is irrational."),
+            ("Is the square root of two rational or irrational?", "The square root of two is irrational."),
+            ("What is the Fibonacci sequence known for?", "It appears in many natural patterns."),
+            ("What is one use of prime numbers?", "They are used in modern cryptography."),
+            ("How large is the set of real numbers?", "It is uncountably infinite."),
+        )
+    ]
+    return {"geography": geography, "chemistry": chemistry, "math": math}
+
+
+def _computed_facts(rng: random.Random) -> Payload:
+    country_facts = [
+        f"{country.capital} is the capital of {country.name}."
+        for country in stable_pick(rng, quiz_countries(), 8)
+    ]
+    element_facts = [
+        f"{element.name} ({element.symbol}) is element {element.number} on the periodic table."
+        for element in stable_pick(rng, ELEMENTS, 8)
+    ]
+    return {"general": country_facts + element_facts + list(_MATH_FACTS)}
+
+
+_COMMON_FIVE_LETTER_WORDS = (
+    "about", "above", "after", "again", "apple", "beach", "brain", "brave", "bread", "chair",
+    "cloud", "dance", "dream", "earth", "faith", "field", "flame", "focus", "fruit", "grace",
+    "green", "happy", "heart", "house", "light", "magic", "music", "ocean", "peace", "plant",
+    "power", "quiet", "river", "smile", "sound", "space", "speed", "sport", "stone", "story",
+    "sweet", "table", "think", "tiger", "today", "train", "trust", "water", "world", "write",
+)
+
+
+def _computed_words(rng: random.Random) -> Payload:
+    candidates = set(_COMMON_FIVE_LETTER_WORDS)
+    for text in (
+        *(country.name for country in COUNTRIES),
+        *(country.capital for country in COUNTRIES),
+        *(element.name for element in ELEMENTS),
+    ):
+        normalized = fold(text).lower()
+        for index in range(len(normalized) - 4):
+            word = normalized[index : index + 5]
+            if word.isalpha():
+                candidates.add(word)
+    words = stable_pick(rng, sorted(candidates), 151)
+    if len(words) < 151:
+        raise ValueError(f"five-letter word pool only has {len(words)} entries; 151 are required")
+    return {"five_letter": words}
+
+
+def _curated_packs(data_dir: Path) -> dict[str, Payload]:
+    """Load existing curated packs without including prior generated output."""
+    curated: dict[str, Payload] = {}
+    for path in sorted(data_dir.glob("*.json")):
+        if path.name.endswith(".generated.json"):
+            continue
+        stem = path.name[:-5]
+        if not _STEM_RE.fullmatch(stem):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Could not read curated content pack {path}: {exc}") from exc
+        if isinstance(payload, list):
+            payload = {"general": payload}
+        errors = validate_payload(stem, payload)
+        if errors:
+            raise ValueError(f"Invalid curated content pack {path}: {'; '.join(errors[:5])}")
+        curated[stem] = payload
+    return curated
+
+
+def register_content_pipeline(data_dir: Path = DEFAULT_OUT) -> None:
+    """Register the built-in Stage 3-6 builders for the CLI's ``--all`` option."""
+    registered = {name for name, _ in BUILDERS}
+    names = {f"text:{kind}" for kind in TEXT_GENERATORS} | {
+        "computed:trivia", "computed:facts", "computed:words", "curated:packs",
+    }
+    if names <= registered:
+        return
+    if names & registered:
+        raise ValueError("the built-in content pipeline is only partially registered")
+
+    for kind, generator in TEXT_GENERATORS.items():
+        def build_text(rng: random.Random, kind=kind, generator=generator) -> dict[str, Payload]:
+            return {f"{kind}.generated": generator(rng, PIPELINE_CAPS[kind])}
+
+        builder(f"text:{kind}")(build_text)
+
+    @builder("computed:trivia")
+    def build_trivia(rng: random.Random) -> dict[str, Payload]:
+        return {"trivia.generated": _computed_trivia(rng)}
+
+    @builder("computed:facts")
+    def build_facts(rng: random.Random) -> dict[str, Payload]:
+        return {"facts.generated": _computed_facts(rng)}
+
+    @builder("computed:words")
+    def build_words(rng: random.Random) -> dict[str, Payload]:
+        return {"words.generated": _computed_words(rng)}
+
+    @builder("curated:packs")
+    def build_curated(_rng: random.Random) -> dict[str, Payload]:
+        return _curated_packs(data_dir)
 
 
 # ======================================================================================
@@ -1056,9 +1187,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="output directory (default: bot/data)")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="random seed (default: %(default)s)")
     parser.add_argument("--dry-run", action="store_true", help="build and validate, but write nothing")
+    parser.add_argument("--all", action="store_true", help="run the built-in Stages 3-6 content pipeline")
     args = parser.parse_args(argv)
 
-    packs = build_all(args.seed)
+    if args.all:
+        try:
+            register_content_pipeline(args.out)
+        except ValueError as exc:
+            print(f"Content pipeline setup failed: {exc}", file=sys.stderr)
+            return 1
+    try:
+        packs = build_all(args.seed)
+    except (OSError, ValueError) as exc:
+        print(f"Content generation failed: {exc}", file=sys.stderr)
+        return 1
     errors = validate_all(packs)
     print(summarize(packs))
     if errors:
@@ -1073,6 +1215,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     for stem in sorted(packs):
+        if args.all and not stem.endswith(".generated"):
+            continue
         atomic_write_json(args.out / f"{stem}.json", packs[stem])
     print(f"\nWrote {len(packs)} file(s) to {args.out}")
     return 0

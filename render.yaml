@@ -16,3 +16,6 @@ services:
         sync: false
       - key: WEATHER_API_KEY
         sync: false
+      # Optional, comma-separated Telegram user IDs authorized to administer the bot.
+      - key: ADMIN_IDS
+        sync: false

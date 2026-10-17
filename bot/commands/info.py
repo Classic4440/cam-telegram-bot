@@ -39,7 +39,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 **Games:**
 /dice [expr] - Roll dice (2d6+3, d20, etc)
 /tictactoe - Play tic-tac-toe vs AI
-/hangman - Hangman game
+/hangman - Start hangman; guess with /guess [letter] or send a letter
+/guess [letter] - Guess a letter in your hangman game
 /blackjack - Play blackjack
 
 **Math & Logic:**

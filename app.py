@@ -7,7 +7,7 @@ import signal
 from threading import Thread
 
 from flask import Flask
-from telegram.ext import Application, MessageHandler, filters
+from telegram.ext import Application, JobQueue, MessageHandler, filters
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from bot.ai import AIService
@@ -49,9 +49,12 @@ async def main() -> None:
     application = (
         Application.builder()
         .token(settings.telegram_token)
+        .job_queue(JobQueue())
         .concurrent_updates(settings.concurrent_updates)
         .build()
     )
+    if application.job_queue is None:
+        raise RuntimeError("Telegram JobQueue is unavailable; install python-telegram-bot[job-queue].")
     application.bot_data.update(
         state=state,
         store=store,

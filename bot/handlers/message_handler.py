@@ -6,6 +6,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.commands.games import handle_game_text
 from bot.errors import AIUnavailable
 from bot.formatting import reply_ai
 from bot.registry import command_summary
@@ -30,6 +31,8 @@ async def handle_user_text(
 ) -> None:
     """Send text through the standard AI chat and memory pipeline."""
     if not update.message:
+        return
+    if await handle_game_text(update, context, text):
         return
 
     user = update.effective_user

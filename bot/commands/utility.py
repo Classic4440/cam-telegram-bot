@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -13,6 +13,17 @@ from bot.registry import register
 from bot.services.timeparse import TimeParseError, parse_reminder
 
 logger = logging.getLogger(__name__)
+
+
+async def _send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Deliver a scheduled reminder."""
+    job = context.job
+    if job is None:
+        raise RuntimeError("Reminder callback ran without a scheduled job")
+    await context.bot.send_message(
+        chat_id=job.data["chat_id"],
+        text=f"⏰ Reminder: {job.data['message']}",
+    )
 
 
 @register("time")
@@ -33,6 +44,17 @@ async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         due, message = parse_reminder(text)
+        job_queue = context.job_queue
+        chat = update.effective_chat
+        if job_queue is None or chat is None:
+            await safe_reply(update, "❌ Reminders are unavailable right now. Please try again later.")
+            return
+
+        job_queue.run_once(
+            _send_reminder,
+            when=due.astimezone(timezone.utc),
+            data={"chat_id": chat.id, "message": message},
+        )
         response = f"✅ Reminder set for {due.strftime('%Y-%m-%d %H:%M UTC')}\n📝 Message: {message}"
         await safe_reply(update, response)
     except TimeParseError as e:

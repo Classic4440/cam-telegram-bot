@@ -6,7 +6,7 @@ Pack format (one file per kind; ``<kind>.json`` and/or ``<kind>.generated.json``
 
 or, for structured kinds (trivia, riddles), ``{"category": [{...}, ...]}``.
 
-* Curated and generated packs for the same kind are merged and de-duplicated (case/space-insensitive).
+* Curated and generated packs for the same kind are merged and de-duplicated (case/space-insensitive), with curated entries taking precedence.
 * ``pick`` walks a shuffled "deck" per (chat, kind, category) so the same entry never repeats until the
   whole deck has been used.
 * ``reload`` re-reads disk, so new packs go live without a restart (admin ``/reload``).
@@ -49,7 +49,10 @@ class ContentLibrary:
     def load(self) -> dict[str, int]:
         packs: dict[str, dict[str, list[Any]]] = {}
         seen: dict[str, set[str]] = {}
-        files = sorted(self.data_dir.glob("*.json"))
+        files = sorted(
+            self.data_dir.glob("*.json"),
+            key=lambda path: (path.name.endswith(".generated.json"), path.name),
+        )
         for path in files:
             match = _PACK_NAME.match(path.name)
             if not match:
@@ -100,6 +103,10 @@ class ContentLibrary:
 
     def category_counts(self, kind: str) -> dict[str, int]:
         return {cat: len(items) for cat, items in self._packs.get(kind, {}).items()}
+
+    def get_all(self, kind: str) -> list[Any]:
+        """Return all entries for a content kind across its categories."""
+        return list(self.pool(kind))
 
     def resolve_category(self, kind: str, wanted: str | None) -> str | None:
         """Map a user supplied word to a category (exact, then unique prefix, then substring)."""

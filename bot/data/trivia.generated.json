@@ -1,0 +1,129 @@
+{
+  "general": [
+    {
+      "q": "Which country is South Korea?",
+      "a": "South Korea",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Kenya?",
+      "a": "Kenya",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Portugal?",
+      "a": "Portugal",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is South Africa?",
+      "a": "South Africa",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Belgium?",
+      "a": "Belgium",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Uganda?",
+      "a": "Uganda",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Chile?",
+      "a": "Chile",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Peru?",
+      "a": "Peru",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Spain?",
+      "a": "Spain",
+      "category": "geography"
+    },
+    {
+      "q": "Which country is Colombia?",
+      "a": "Colombia",
+      "category": "geography"
+    },
+    {
+      "q": "What element is Iodine?",
+      "a": "Iodine",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Bromine?",
+      "a": "Bromine",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Copper?",
+      "a": "Copper",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Phosphorus?",
+      "a": "Phosphorus",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Sulfur?",
+      "a": "Sulfur",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Oxygen?",
+      "a": "Oxygen",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Gold?",
+      "a": "Gold",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Xenon?",
+      "a": "Xenon",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Hydrogen?",
+      "a": "Hydrogen",
+      "category": "chemistry"
+    },
+    {
+      "q": "What element is Helium?",
+      "a": "Helium",
+      "category": "chemistry"
+    },
+    {
+      "q": "True or false: π is irrational (never repeats as a decimal)",
+      "a": "True",
+      "category": "math"
+    },
+    {
+      "q": "True or false: The Fibonacci sequence appears in nature",
+      "a": "True",
+      "category": "math"
+    },
+    {
+      "q": "True or false: Prime numbers are fundamental to cryptography",
+      "a": "True",
+      "category": "math"
+    },
+    {
+      "q": "True or false: √2 was the first proven irrational number",
+      "a": "True",
+      "category": "math"
+    },
+    {
+      "q": "True or false: The set of real numbers is uncountably infinite",
+      "a": "True",
+      "category": "math"
+    }
+  ]
+}
