@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import math
 from html.parser import HTMLParser
 
 from telegram import Update
@@ -79,9 +80,26 @@ def _format_vision_html(text: str) -> str:
     return "".join(sanitizer.parts).strip()
 
 
+async def _allow_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    message = getattr(update, "effective_message", None) or update.message
+    if user is None or message is None:
+        return False
+    state = get_state(context)
+    wait = state.limiter.consume(user.id, 2.0)
+    if wait > 0:
+        await message.reply_text(
+            f"⏳ Please wait {math.ceil(wait)}s before sending more media."
+        )
+        return False
+    return True
+
+
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle image messages: resize, analyze, OCR."""
     if not update.message or not update.message.photo:
+        return
+    if not await _allow_media(update, context):
         return
 
     try:
@@ -140,6 +158,8 @@ async def _handle_audio_message(
     file_type: str,
 ) -> None:
     if not update.message:
+        return
+    if not await _allow_media(update, context):
         return
 
     try:

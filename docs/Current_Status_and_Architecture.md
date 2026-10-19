@@ -25,6 +25,8 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
 - `/help` lists every visible registered command in a category; newly added commands without a category mapping are included under Settings.
 - `/timezone` saves a selected IANA timezone in the user's Supabase profile. `/time` and `/remind` use that preference (UTC by default).
 - `/remind` supports both `/remind <when> <message>` and a two-step inline-cancelable conversation.
+- AI replies offer a user-scoped Regenerate button; free-text and media work share per-user token-bucket limits.
+- `/save`, `/saved`, and `/unsave` provide private notes backed by the existing notes store.
 - AI system prompt auto-generated from command metadata.
 
 #### 2. **AI Service** (`bot/ai.py`)
@@ -168,6 +170,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 - ✅ `app.py` — Telegram polling entry point with media and text handlers
 - ✅ `supabase/user_profiles.sql` — long-term memory table with row-level security enabled
 - ✅ `supabase/profile_timezone.sql` — adds the timezone preference column to `profiles` (apply this migration for durable `/timezone` preferences)
+- ✅ `supabase/saved_notes.sql` — creates the RLS-protected notes table (apply for durable `/save` notes)
 - ✅ `requirements.txt` — runtime dependencies
 - ✅ `render.yaml` — deployment config
 
@@ -181,7 +184,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 1. **Stage 4**: Implement computed generators (trivia from Stage 2, element facts, math facts).
 2. **Stage 5**: Curated pass-through builder + Stage 1/2 test updates.
 3. **Stage 6**: Strict per-kind validation; real run to `bot/data`; loader round-trip verification.
-4. **Database**: Apply `supabase/user_profiles.sql` for durable user memory and `supabase/profile_timezone.sql` for durable timezone preferences.
+4. **Database**: Apply `supabase/user_profiles.sql` for durable user memory, `supabase/profile_timezone.sql` for durable timezone preferences, and `supabase/saved_notes.sql` for durable saved notes.
 5. **Deployment**: Inject `TELEGRAM_TOKEN`, `AI_API_KEY`, and optional Supabase credentials as environment secrets.
 
 ---

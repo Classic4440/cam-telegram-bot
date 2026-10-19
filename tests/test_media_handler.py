@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from bot.ai import AIService, ChatResult
 from bot.config import Settings
 from bot.handlers.media_handler import handle_voice
+from bot.security import TokenBucketLimiter
 from bot.store import Store
 
 
@@ -58,6 +59,7 @@ def test_voice_transcript_uses_chat_pipeline_and_memory(tmp_path: Path) -> None:
             ai=FakeAI(),
             stats=SimpleNamespace(errors=0, messages=0, ai_chats=0),
             user_lock=lambda _user_id: asyncio.Lock(),
+            limiter=TokenBucketLimiter(10, 2),
         )
         replies: list[str] = []
 
@@ -68,7 +70,11 @@ def test_voice_transcript_uses_chat_pipeline_and_memory(tmp_path: Path) -> None:
             voice=SimpleNamespace(file_id="telegram-file-id"),
             reply_text=reply_text,
         )
-        update = SimpleNamespace(message=message, effective_user=SimpleNamespace(id=42))
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
         context = SimpleNamespace(application=SimpleNamespace(bot_data={"state": state}))
 
         with patch(
@@ -98,6 +104,7 @@ def test_voice_transcription_failure_replies_without_chat() -> None:
         state = SimpleNamespace(
             ai=FakeAI(),
             stats=SimpleNamespace(errors=0),
+            limiter=TokenBucketLimiter(10, 2),
         )
         replies: list[str] = []
 
@@ -108,7 +115,11 @@ def test_voice_transcription_failure_replies_without_chat() -> None:
             voice=SimpleNamespace(file_id="telegram-file-id"),
             reply_text=reply_text,
         )
-        update = SimpleNamespace(message=message)
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
         context = SimpleNamespace(application=SimpleNamespace(bot_data={"state": state}))
 
         with patch(

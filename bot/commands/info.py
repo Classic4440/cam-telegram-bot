@@ -23,6 +23,7 @@ _HELP_COMMANDS = {
     "tools": {
         "math", "prime", "factor", "logic", "units", "convert", "chord", "scale",
         "time", "remind", "search", "joke", "quote", "facts", "compliment", "fortune",
+        "save", "saved", "unsave",
     },
     "ai_media": {"translate", "image", "weather"},
     "settings": {

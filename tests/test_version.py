@@ -39,5 +39,7 @@ def test_version_command_is_registered_and_returns_release_notes() -> None:
         assert "group permission reporting" in RELEASE_NOTES
         assert "timezone preferences" in RELEASE_NOTES
         assert "guided reminder conversation" in RELEASE_NOTES
+        assert "AI response regeneration" in RELEASE_NOTES
+        assert "private persistent notes" in RELEASE_NOTES
 
     asyncio.run(run())

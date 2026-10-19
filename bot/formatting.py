@@ -179,13 +179,17 @@ async def reply_html(message, html_text: str, **kwargs):
 async def reply_ai(message, markdown: str, **kwargs):
     """Send model output: Markdown -> HTML with a plain-text fallback, chunked for long answers."""
     sent = None
-    for chunk in chunk_text(markdown):
+    chunks = chunk_text(markdown)
+    for index, chunk in enumerate(chunks):
+        chunk_kwargs = dict(kwargs)
+        if index < len(chunks) - 1:
+            chunk_kwargs.pop("reply_markup", None)
         try:
             sent = await message.reply_text(
-                markdown_to_html(chunk), parse_mode=ParseMode.HTML, **kwargs
+                markdown_to_html(chunk), parse_mode=ParseMode.HTML, **chunk_kwargs
             )
         except BadRequest:
-            sent = await message.reply_text(chunk, parse_mode=None, **kwargs)
+            sent = await message.reply_text(chunk, parse_mode=None, **chunk_kwargs)
     return sent
 
 

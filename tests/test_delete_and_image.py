@@ -21,6 +21,7 @@ from bot.config import DEFAULT_VISION_MODEL, Settings
 from bot.errors import AIUnavailable
 from bot.handlers.media_handler import ANALYSIS_PROMPT, OCR_PROMPT, handle_image
 from bot.handlers.message_handler import handle_user_text
+from bot.security import TokenBucketLimiter
 
 
 def test_delete_requires_reply_and_admin_permissions() -> None:
@@ -171,12 +172,17 @@ def test_image_handler_runs_ocr_and_analysis_and_escapes_html(tmp_path: Path) ->
         state = SimpleNamespace(
             ai=FakeAI(),
             stats=SimpleNamespace(errors=0),
+            limiter=TokenBucketLimiter(10, 2),
         )
         message = SimpleNamespace(
             photo=[SimpleNamespace(file_id="telegram-photo")],
             reply_text=AsyncMock(),
         )
-        update = SimpleNamespace(message=message)
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"state": state})
         )
@@ -215,12 +221,20 @@ def test_image_handler_preserves_ocr_format_and_sanitizes_analysis_html(tmp_path
                     return "# Receipt\n\nTea\n$3.00\nCoffee\n$4.00"
                 return "<p><b>Receipt photo</b></p><ul><li>Two items</li></ul><script>unsafe()</script>"
 
-        state = SimpleNamespace(ai=FakeAI(), stats=SimpleNamespace(errors=0))
+        state = SimpleNamespace(
+            ai=FakeAI(),
+            stats=SimpleNamespace(errors=0),
+            limiter=TokenBucketLimiter(10, 2),
+        )
         message = SimpleNamespace(
             photo=[SimpleNamespace(file_id="telegram-photo")],
             reply_text=AsyncMock(),
         )
-        update = SimpleNamespace(message=message)
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
         context = SimpleNamespace(application=SimpleNamespace(bot_data={"state": state}))
 
         with (
@@ -258,12 +272,17 @@ def test_image_handler_reports_provider_failure_friendly() -> None:
         state = SimpleNamespace(
             ai=FakeAI(),
             stats=SimpleNamespace(errors=0),
+            limiter=TokenBucketLimiter(10, 2),
         )
         message = SimpleNamespace(
             photo=[SimpleNamespace(file_id="telegram-photo")],
             reply_text=AsyncMock(),
         )
-        update = SimpleNamespace(message=message)
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={"state": state})
         )
@@ -307,9 +326,19 @@ def test_natural_language_delete_routes_to_permission_checked_action() -> None:
     async def run() -> None:
         update = SimpleNamespace(
             message=SimpleNamespace(text="Can you delete my last message?"),
+            effective_message=SimpleNamespace(reply_text=AsyncMock()),
             effective_user=SimpleNamespace(id=42),
         )
-        context = SimpleNamespace()
+        context = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={
+                    "state": SimpleNamespace(
+                        settings=Settings.for_testing(),
+                        limiter=TokenBucketLimiter(10, 2),
+                    )
+                }
+            )
+        )
 
         with (
             patch(

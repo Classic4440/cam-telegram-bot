@@ -40,7 +40,7 @@ cam-telegram-bot/
 │   ├── curated_games.py         # Riddles, trivia, tongue twisters (~500+ entries)
 │   ├── generate_content.md      # Content generator source
 │   └── generate_content.py      # Executable content generator
-├── tests/                        # 516 executable tests and readable Markdown sources
+├── tests/                        # Automated regression suite and readable Markdown sources
 │   ├── test_memory.py           # Profile persistence and prompt injection
 │   ├── test_delete_and_image.py # Admin message deletion and vision requests
 │   ├── test_generate_content.py
@@ -55,7 +55,9 @@ cam-telegram-bot/
 │   ├── Current_Status_and_Architecture.md
 │   └── services_and_curated_full.md
 └── supabase/                     # Supabase RLS policies & migrations
-    └── user_profiles.sql        # Long-term memory profile table
+    ├── user_profiles.sql        # Long-term memory profile table
+    ├── profile_timezone.sql     # Timezone preference field
+    └── saved_notes.sql          # Private saved-note table
 ```
 
 ## Key Features
@@ -74,6 +76,9 @@ cam-telegram-bot/
 - **Voice transcription** support
 - **Vision-powered image OCR and description** using the configured vision model
 - **Natural-language message deletion** for replied-to messages, with administrator and bot permission checks
+- **Regenerate controls** on AI replies, user-scoped and rate-limited
+- **Private saved notes** with `/save`, `/saved`, and `/unsave`
+- **Timezone-aware time and reminders**, including an inline timezone picker
 
 ### Content System
 - **Deterministic seeded generation** with atomic writes
@@ -104,17 +109,19 @@ SUPABASE_URL=optional
 SUPABASE_KEY=optional
 ```
 
-The bot reads credentials directly from the process environment; do not commit a `.env` file. Configure
-the profile table by applying `supabase/user_profiles.sql` in Supabase. For durable server-side access,
+The bot reads credentials directly from the process environment; do not commit a `.env` file. Apply
+`supabase/user_profiles.sql`, `supabase/profile_timezone.sql`, and `supabase/saved_notes.sql` in Supabase
+to enable durable user memory, timezone preferences, and saved notes. For durable server-side access,
 `SUPABASE_KEY` must be a server key permitted to bypass row-level security.
 
 `/personal <information>` saves a user's profile and `/update` displays it. The profile is also included
-in the system prompt for AI chat and AI tasks.
+in the system prompt for AI chat and AI tasks. `/save <note>` stores a private note; use `/saved` to list
+notes and `/unsave <note_id>` to remove one. Saved-note commands only operate in a private chat.
 
 ## Testing
 
-Run `python -m pytest tests/` for all 516 tests. The three Markdown test files are the readable source
-copies for the generated Python test suites.
+Run `python -m pytest tests/` for the full test suite. The three Markdown test files are the readable
+source copies for the generated Python test suites.
 
 ## Development Notes
 

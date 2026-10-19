@@ -17,6 +17,7 @@ from bot.commands.utility import (
     _remind_receive_time,
     build_reminder_conversation_handler,
     cmd_time,
+    cmd_remind,
     handle_timezone_callback,
 )
 from bot.config import Settings
@@ -86,6 +87,31 @@ def test_saved_timezone_is_stripped_from_reminder_message_and_used_for_clock() -
 
     assert due.tzinfo == timezone.utc
     assert reminder_text == "drink water"
+
+
+def test_argument_reminder_uses_saved_timezone_and_removes_zone_token() -> None:
+    async def run() -> None:
+        store = Store()
+        await store.set_timezone(42, "Africa/Kampala")
+        context = _context(store)
+        jobs: list[dict] = []
+        context.args = ["tomorrow", "9am", "Africa/Kampala", "standup"]
+        context.job_queue = SimpleNamespace(
+            run_once=Mock(side_effect=lambda *_args, **kwargs: jobs.append(kwargs))
+        )
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_chat=SimpleNamespace(id=123),
+        )
+        with patch("bot.commands.utility.safe_reply", new=AsyncMock()) as reply:
+            await cmd_remind(update, context)
+
+        assert len(jobs) == 1
+        assert jobs[0]["when"].astimezone(ZoneInfo("Africa/Kampala")).hour == 9
+        assert jobs[0]["data"]["message"] == "standup"
+        assert "Africa/Kampala" in reply.await_args.args[1]
+
+    asyncio.run(run())
 
 
 def test_timezone_aware_reminder_conversation_completes_and_schedules() -> None:
