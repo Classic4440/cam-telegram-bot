@@ -76,27 +76,3 @@ def process_image(file_path: Path, max_width: int = 1024) -> tuple[Path, str]:
     except Exception as e:
         logger.exception(f"Image processing failed: {e}")
         raise MediaError(f"Failed to process image: {e}") from None
-
-
-async def analyze_image(file_path: Path, api_key: str | None = None) -> str:
-    """Analyze image with vision API (placeholder)."""
-    if not api_key:
-        logger.warning("No API key for image analysis")
-        return "[Image analysis unavailable - configure AI_API_KEY]"
-
-    try:
-        logger.info(f"Analyzing image: {file_path}")
-        return "[Image analysis coming soon]"
-    except Exception as e:
-        logger.exception(f"Image analysis failed: {e}")
-        return f"[Analysis error: {str(e)[:50]}]"
-
-
-def extract_text_from_image(file_path: Path) -> str:
-    """Extract text from image using OCR (placeholder)."""
-    try:
-        logger.info(f"Extracting text from: {file_path}")
-        return "[OCR coming soon]"
-    except Exception as e:
-        logger.exception(f"OCR failed: {e}")
-        return f"[OCR error: {str(e)[:50]}]"

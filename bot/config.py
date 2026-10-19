@@ -11,6 +11,7 @@ from dataclasses import dataclass
 DEFAULT_MODEL_FAST = "openai/gpt-oss-20b"
 DEFAULT_MODEL_SMART = "openai/gpt-oss-120b"
 DEFAULT_FALLBACK_MODELS = ("llama-3.3-70b-versatile", "llama-3.1-8b-instant")
+DEFAULT_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
 def _get(name: str) -> str | None:
@@ -78,6 +79,7 @@ class Settings:
     model_fast: str = DEFAULT_MODEL_FAST
     model_smart: str = DEFAULT_MODEL_SMART
     model_fallbacks: tuple[str, ...] = DEFAULT_FALLBACK_MODELS
+    vision_model: str = DEFAULT_VISION_MODEL
     whisper_model: str = "whisper-large-v3"
     ai_timeout: float = 30.0
     ai_max_attempts: int = 2
@@ -119,6 +121,7 @@ class Settings:
             model_fast=fast,
             model_smart=smart,
             model_fallbacks=_csv("AI_FALLBACK_MODELS", DEFAULT_FALLBACK_MODELS),
+            vision_model=_get("AI_VISION_MODEL") or DEFAULT_VISION_MODEL,
             whisper_model=_get("WHISPER_MODEL") or "whisper-large-v3",
             ai_timeout=_float("AI_TIMEOUT_SECONDS", 30.0, lo=5.0, hi=120.0),
             ai_max_attempts=_int("AI_MAX_ATTEMPTS", 2, lo=1, hi=5),

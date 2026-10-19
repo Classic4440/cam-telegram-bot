@@ -67,6 +67,7 @@ Send voice - Voice message transcription + TTS reply
 /help - Commands (this message)
 /version - Bot version and release notes
 /myrights - Check my status and permissions in this group
+/delete - Reply to a message with /delete to remove it (admins only)
 /stats - Bot statistics
 /admin - Admin panel
 

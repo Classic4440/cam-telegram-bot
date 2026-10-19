@@ -12,12 +12,15 @@ Why this exists instead of calling the SDK in each handler
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import mimetypes
 import random
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from openai import (
     APIConnectionError,
@@ -131,6 +134,11 @@ BASE_RULES = (
     "and permissions vary by chat. Never assume or claim administrator status without checking. "
     "If asked about your status or permissions in the current group, tell the user to run /myrights. "
     "When granted appropriate permissions, you can manage the group within those permissions. "
+    "You cannot execute Telegram API actions directly through chat. If a user asks you to delete a message, "
+    "kick a user, or change group settings, explain that you cannot perform that action from normal chat. "
+    "For message deletion, say: 'Please reply to the specific message with `/delete` to remove it, or use "
+    "the group settings to manage users.' Never claim to have deleted a message or to have permissions you "
+    "have not verified; `/delete` requires an administrator request and the bot's delete permission. "
     "You may mention ONLY the bot commands in the authoritative list below. Never invent commands. "
     "If asked what you can do, summarise the categories and point to /help."
 )
@@ -332,3 +340,47 @@ class AIService:
                 model=self.settings.whisper_model, file=audio
             )
         return transcription.text.strip()
+
+    async def analyze_image(self, path: str | Path, instruction: str) -> str:
+        """Send an image and a focused instruction to the configured vision model."""
+        image_path = Path(path)
+        try:
+            image_data = await asyncio.to_thread(image_path.read_bytes)
+        except OSError as exc:
+            logger.exception("Could not read image for vision analysis")
+            raise AIUnavailable("image could not be read") from exc
+
+        mime_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+        data_url = f"data:{mime_type};base64,{base64.b64encode(image_data).decode('ascii')}"
+
+        try:
+            completion = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.settings.vision_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": instruction},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": data_url},
+                                },
+                            ],
+                        }
+                    ],
+                    temperature=0.2,
+                    max_tokens=900,
+                ),
+                timeout=self.settings.ai_timeout + 5,
+            )
+        except (APIError, asyncio.TimeoutError) as exc:
+            logger.exception("Vision model request failed")
+            self.failures += 1
+            raise AIUnavailable("vision model request failed") from exc
+
+        text = (completion.choices[0].message.content or "").strip()
+        if not text:
+            self.failures += 1
+            raise AIUnavailable("vision model returned an empty response")
+        return text

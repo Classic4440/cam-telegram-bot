@@ -1,18 +1,20 @@
 """Media handlers: images, audio, voice messages."""
 from __future__ import annotations
 
+import asyncio
+import html
 import logging
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.errors import AIUnavailable
+from bot.formatting import reply_html
 from bot.handlers.message_handler import handle_user_text
 from bot.state import get_state
 from bot.utils import (
     MediaError,
-    analyze_image,
     download_file,
-    extract_text_from_image,
     process_image,
 )
 
@@ -34,16 +36,39 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Process (resize)
         processed_path, original_info = process_image(local_path)
 
-        # Extract text (OCR)
-        text_content = extract_text_from_image(processed_path)
+        state = get_state(context)
+        text_result, analysis_result = await asyncio.gather(
+            state.ai.analyze_image(
+                processed_path,
+                "Extract all text from this image. If there is no text, say 'No text found'.",
+            ),
+            state.ai.analyze_image(processed_path, "Describe this image in detail."),
+            return_exceptions=True,
+        )
 
-        # Analyze with vision API
-        config = context.bot_data.get("config") if context.bot_data else None
-        ai_key = config.ai_api_key if config else None
-        analysis = await analyze_image(processed_path, ai_key)
+        sections: list[tuple[str, str]] = []
+        for title, result in (
+            ("📝 Text detected", text_result),
+            ("🤖 Analysis", analysis_result),
+        ):
+            if isinstance(result, AIUnavailable):
+                state.stats.errors += 1
+                content = "Sorry, image processing is unavailable right now. Please try again later."
+            elif isinstance(result, Exception):
+                raise result
+            else:
+                content = result
+            sections.append((title, content))
 
-        response = f"✅ Image processed!\n\n📏 Original: {original_info}\n\n📝 Text detected:\n{text_content}\n\n🤖 Analysis:\n{analysis}"
-        await update.message.reply_text(response)
+        response = (
+            f"<b>✅ Image processed</b>\n\n"
+            f"📏 Original: {html.escape(original_info)}\n\n"
+            + "\n\n".join(
+                f"<b>{title}</b>\n{html.escape(content)}"
+                for title, content in sections
+            )
+        )
+        await reply_html(update.message, response)
 
     except MediaError as e:
         await update.message.reply_text(f"❌ Error: {e}")

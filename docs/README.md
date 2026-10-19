@@ -40,8 +40,9 @@ cam-telegram-bot/
 │   ├── curated_games.py         # Riddles, trivia, tongue twisters (~500+ entries)
 │   ├── generate_content.md      # Content generator source
 │   └── generate_content.py      # Executable content generator
-├── tests/                        # 493 executable tests and readable Markdown sources
+├── tests/                        # 514 executable tests and readable Markdown sources
 │   ├── test_memory.py           # Profile persistence and prompt injection
+│   ├── test_delete_and_image.py # Admin message deletion and vision requests
 │   ├── test_generate_content.py
 │   ├── test_generate_content_data.py
 │   ├── test_generate_content_text.py
@@ -71,6 +72,7 @@ cam-telegram-bot/
 - **Intent routing** with confidence thresholds
 - **Model fallback chain** with retry+jitter (Groq → OpenAI → Claude)
 - **Voice transcription** support
+- **Vision-powered image OCR and description** using the configured vision model
 
 ### Content System
 - **Deterministic seeded generation** with atomic writes
@@ -96,6 +98,7 @@ Set environment variables:
 ```bash
 TELEGRAM_TOKEN=your_bot_token
 AI_API_KEY=your_groq_key
+AI_VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct  # optional
 SUPABASE_URL=optional
 SUPABASE_KEY=optional
 ```
@@ -109,7 +112,7 @@ in the system prompt for AI chat and AI tasks.
 
 ## Testing
 
-Run `python -m pytest tests/` for all 493 tests. The three Markdown test files are the readable source
+Run `python -m pytest tests/` for all 514 tests. The three Markdown test files are the readable source
 copies for the generated Python test suites.
 
 ## Development Notes

@@ -96,6 +96,65 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await safe_reply(update, response)
 
 
+@register("delete")
+async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Delete a message by replying to it with /delete."""
+    message = update.message
+    chat = update.effective_chat
+    user = update.effective_user
+    if (
+        message is None
+        or message.reply_to_message is None
+        or chat is None
+        or chat.type not in {"group", "supergroup"}
+    ):
+        await safe_reply(
+            update,
+            "Usage: reply to the message you want to remove with /delete.",
+        )
+        return
+    if user is None:
+        await safe_reply(update, "I couldn't verify your group permissions.")
+        return
+
+    try:
+        requesting_member = await context.bot.get_chat_member(chat.id, user.id)
+    except TelegramError:
+        logger.exception("Could not verify requesting user's /delete permissions in chat %s", chat.id)
+        await safe_reply(update, "I couldn't verify the permissions needed to delete that message.")
+        return
+
+    if requesting_member.status not in {"administrator", "creator"}:
+        await safe_reply(update, "Only group administrators can use /delete.")
+        return
+
+    try:
+        bot_member = await context.bot.get_chat_member(chat.id, context.bot.id)
+    except TelegramError:
+        logger.exception("Could not verify bot's /delete permissions in chat %s", chat.id)
+        await safe_reply(update, "I couldn't verify the permissions needed to delete that message.")
+        return
+
+    if bot_member.status not in {"administrator", "creator"} or (
+        bot_member.status != "creator"
+        and not getattr(bot_member, "can_delete_messages", False)
+    ):
+        await safe_reply(
+            update,
+            "I don't have permission to delete messages in this group. Check /myrights.",
+        )
+        return
+
+    try:
+        await message.reply_to_message.delete()
+    except TelegramError:
+        logger.exception("Could not delete replied-to message in chat %s", chat.id)
+        await safe_reply(update, "I couldn't delete that message. It may be too old or no longer available.")
+        return
+
+    await safe_reply(update, "✅ Message deleted.")
+
+
 @register("stats")
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show bot statistics."""
