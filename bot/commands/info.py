@@ -3,13 +3,106 @@ from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.formatting import safe_reply
-from bot.registry import register
+from bot.formatting import markdown_to_html, safe_reply
+from bot.registry import callback, register, visible_commands
 
 logger = logging.getLogger(__name__)
+
+_HELP_CATEGORIES = (
+    ("games", "🎮 Games"),
+    ("tools", "🛠️ Tools"),
+    ("ai_media", "🤖 AI & Media"),
+    ("settings", "⚙️ Settings"),
+)
+_HELP_COMMANDS = {
+    "games": {"game", "dice", "tictactoe", "hangman", "guess", "blackjack"},
+    "tools": {
+        "math", "prime", "factor", "logic", "units", "convert", "chord", "scale",
+        "time", "remind", "search", "joke", "quote", "facts", "compliment", "fortune",
+    },
+    "ai_media": {"translate", "image", "weather"},
+    "settings": {"start", "help", "version", "myrights", "delete", "stats", "admin", "reload"},
+}
+
+
+def _help_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"help:{user_id}:category:{slug}",
+                )
+            ]
+            for slug, label in _HELP_CATEGORIES
+        ]
+    )
+
+
+def _category_commands(slug: str) -> list[str]:
+    specs = visible_commands(include_admin=True)
+    names = _HELP_COMMANDS.get(slug, set())
+    selected = [spec for spec in specs if spec.name in names]
+    if slug == "settings":
+        assigned = set().union(*_HELP_COMMANDS.values())
+        selected.extend(spec for spec in specs if spec.name not in assigned)
+    return [f"/{spec.name} — {spec.description}" for spec in selected]
+
+
+async def _show_help_category(query, user_id: int, slug: str) -> None:
+    labels = dict(_HELP_CATEGORIES)
+    if slug not in labels:
+        await query.edit_message_text("This help menu has expired. Send /help to open it again.")
+        return
+    commands = _category_commands(slug)
+    body = "\n".join(commands) or "No commands are available in this category."
+    if slug == "ai_media":
+        body += "\n\nSend a photo for OCR and image description, or send audio/voice for transcription."
+    await query.edit_message_text(
+        markdown_to_html(f"**{labels[slug]}**\n\n{body}"),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Back", callback_data=f"help:{user_id}:back")]]
+        ),
+    )
+
+
+@callback("help")
+async def handle_help_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    payload: str,
+) -> None:
+    query = update.callback_query
+    parts = payload.split(":")
+    try:
+        owner_id = int(parts[0])
+    except (ValueError, IndexError):
+        await query.answer("This help button has expired.")
+        return
+    if update.effective_user is None or update.effective_user.id != owner_id:
+        await query.answer("This help menu belongs to another user.", show_alert=True)
+        return
+    if len(parts) == 2 and parts[1] == "back":
+        await query.answer()
+        await query.edit_message_text(
+            markdown_to_html("👋 **Welcome! Choose a category to see available commands:**"),
+            parse_mode="HTML",
+            reply_markup=_help_menu_keyboard(owner_id),
+        )
+        return
+    if len(parts) == 3 and parts[1] == "category":
+        slug = parts[2]
+        if slug not in dict(_HELP_CATEGORIES):
+            await query.answer("This help category has expired.")
+            return
+        await query.answer()
+        await _show_help_category(query, owner_id, slug)
+        return
+    await query.answer("This help button has expired.")
 
 
 @register("start")
@@ -34,47 +127,11 @@ Type /help for full command list.
 @register("help")
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Help command."""
-    response = """**Command List**
-
-**Games:**
-/dice [expr] - Roll dice (2d6+3, d20, etc)
-/tictactoe - Play tic-tac-toe vs AI
-/hangman - Start hangman; guess with /guess [letter] or send a letter
-/guess [letter] - Guess a letter in your hangman game
-/blackjack - Play blackjack
-
-**Math & Logic:**
-/math [expr] - Safe calculator (sqrt, sin, log, etc)
-/prime [n] - Check if prime or factorize
-/logic [expr] - Truth tables (a & b | !c, etc)
-/solve [eq] - Solve linear/quadratic equations
-
-**Utilities:**
-/units [conv] - Convert units (10 km to mi, 72 f to c)
-/music [mode] - Music theory (scales, chords)
-/time [when] - Parse time (in 2h, tomorrow 9am, etc)
-/remind [when] [msg] - Set reminder
-/convert [base] - Base converter (2 to 16, etc)
-/translate [text] - Translate text
-
-**Media:**
-Send photo - OCR text extraction
-Send audio - Audio transcription
-Send voice - Voice message transcription + TTS reply
-
-**Info:**
-/start - This message
-/help - Commands (this message)
-/version - Bot version and release notes
-/myrights - Check my status and permissions in this group
-/delete - Reply to a message with /delete to remove it (admins only)
-/stats - Bot statistics
-/admin - Admin panel
-
-**Examples:**
-/dice 2d6+3
-/math sqrt(16) + 2*pi
-/units 10 km to miles
-/remind 30m drink water
-"""
-    await safe_reply(update, response)
+    user = update.effective_user
+    if user is None:
+        return
+    await safe_reply(
+        update,
+        "👋 **Welcome! Choose a category to see available commands:**",
+        reply_markup=_help_menu_keyboard(user.id),
+    )

@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+from telegram.ext import CallbackQueryHandler
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from bot.commands.games import cmd_game, handle_game_callback
+from bot.commands.info import cmd_help, handle_help_callback
+from bot.registry import build_handlers, discover
+
+
+def _context(user_id: int = 42) -> SimpleNamespace:
+    return SimpleNamespace(
+        user_data={},
+        bot_data={
+            "state": SimpleNamespace(
+                limiter=SimpleNamespace(consume=Mock(return_value=0)),
+                stats=SimpleNamespace(callbacks=0, errors=0),
+            ),
+            "content_lib": SimpleNamespace(get_all=lambda _kind: ["apple"]),
+        },
+        args=[],
+    )
+
+
+def _callback_update(data: str, *, user_id: int = 42) -> tuple[SimpleNamespace, AsyncMock, AsyncMock]:
+    answer = AsyncMock()
+    edit = AsyncMock()
+    query = SimpleNamespace(
+        data=data,
+        answer=answer,
+        edit_message_text=edit,
+    )
+    update = SimpleNamespace(
+        callback_query=query,
+        effective_user=SimpleNamespace(id=user_id),
+    )
+    return update, answer, edit
+
+
+def test_game_menu_has_four_inline_game_buttons() -> None:
+    async def run() -> None:
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_message=SimpleNamespace(),
+        )
+        context = _context()
+        context.args = []
+
+        with patch("bot.commands.games.safe_reply", new=AsyncMock()) as reply:
+            await cmd_game(update, context)
+
+        keyboard = reply.await_args.kwargs["reply_markup"].inline_keyboard
+        assert [row[0].text for row in keyboard] == [
+            "Rock Paper Scissors",
+            "Hangman",
+            "Tic-Tac-Toe",
+            "Blackjack",
+        ]
+        assert all(button[0].callback_data.startswith("game:42:") for button in keyboard)
+
+    asyncio.run(run())
+
+
+def test_legacy_game_rps_argument_still_starts_game() -> None:
+    async def run() -> None:
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_message=SimpleNamespace(),
+        )
+        context = _context()
+        context.args = ["rps"]
+
+        with patch("bot.commands.games.safe_reply", new=AsyncMock()) as reply:
+            await cmd_game(update, context)
+
+        keyboard = reply.await_args.kwargs["reply_markup"].inline_keyboard
+        assert [button.text for button in keyboard[0]] == ["Rock", "Paper", "Scissors"]
+
+    asyncio.run(run())
+
+
+def test_ttt_callback_answers_and_edits_menu_to_active_game() -> None:
+    async def run() -> None:
+        update, answer, edit = _callback_update("game:42:select:ttt")
+        context = _context()
+
+        await handle_game_callback(update, context, "42:select:ttt")
+
+        answer.assert_awaited_once_with()
+        assert context.user_data["tictactoe"] == [""] * 9
+        edit.assert_awaited_once()
+        assert edit.await_args.kwargs["reply_markup"] is not None
+        assert "Tic-Tac-Toe" in edit.await_args.args[0]
+
+    asyncio.run(run())
+
+
+def test_stale_and_other_users_game_callbacks_are_safe() -> None:
+    async def run() -> None:
+        update, answer, edit = _callback_update("game:42:stale:unknown")
+        await handle_game_callback(update, _context(), "bad")
+        answer.assert_awaited_once()
+        assert edit.await_args.args[0].find("expired") >= 0
+
+        update, answer, edit = _callback_update("game:42:select:ttt", user_id=7)
+        await handle_game_callback(update, _context(user_id=7), "42:select:ttt")
+        answer.assert_awaited_once()
+        assert answer.await_args.kwargs["show_alert"] is True
+        edit.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_help_command_shows_categories_and_callback_edits_to_category() -> None:
+    async def run() -> None:
+        update = SimpleNamespace(effective_user=SimpleNamespace(id=42))
+        context = _context()
+        with patch("bot.commands.info.safe_reply", new=AsyncMock()) as reply:
+            await cmd_help(update, context)
+
+        keyboard = reply.await_args.kwargs["reply_markup"].inline_keyboard
+        assert [row[0].text for row in keyboard] == [
+            "🎮 Games",
+            "🛠️ Tools",
+            "🤖 AI & Media",
+            "⚙️ Settings",
+        ]
+
+        discover()
+        callback_update, answer, edit = _callback_update("help:42:category:games")
+        await handle_help_callback(callback_update, context, "42:category:games")
+
+        answer.assert_awaited_once_with()
+        edit.assert_awaited_once()
+        assert "/tictactoe" in edit.await_args.args[0]
+        assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "⬅️ Back"
+
+    asyncio.run(run())
+
+
+def test_help_callback_back_and_stale_payload_acknowledged() -> None:
+    async def run() -> None:
+        context = _context()
+        update, answer, edit = _callback_update("help:42:back")
+        await handle_help_callback(update, context, "42:back")
+        answer.assert_awaited_once_with()
+        assert edit.await_args.kwargs["reply_markup"] is not None
+
+        update, answer, edit = _callback_update("help:42:category:obsolete")
+        await handle_help_callback(update, context, "42:category:obsolete")
+        answer.assert_awaited_once()
+        edit.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_registry_installs_callback_query_handler() -> None:
+    discover()
+    handlers = build_handlers()
+    assert any(isinstance(handler, CallbackQueryHandler) for handler in handlers)
