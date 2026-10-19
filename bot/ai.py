@@ -377,7 +377,11 @@ class AIService:
                 timeout=self.settings.ai_timeout + 5,
             )
         except (APIError, asyncio.TimeoutError) as exc:
-            logger.exception("Vision model request failed")
+            logger.exception(
+                "Groq vision request failed (%s): %s",
+                type(exc).__name__,
+                exc,
+            )
             self.failures += 1
             raise AIUnavailable("vision model request failed") from exc
 

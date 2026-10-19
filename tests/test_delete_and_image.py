@@ -7,13 +7,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
+import pytest
+from openai import APIError
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.ai import AIService, build_system_prompt
 from bot.commands.admin import cmd_delete, is_natural_delete_request
-from bot.config import Settings
+from bot.config import DEFAULT_VISION_MODEL, Settings
 from bot.errors import AIUnavailable
 from bot.handlers.media_handler import handle_image
 from bot.handlers.message_handler import handle_user_text
@@ -104,6 +108,53 @@ def test_ai_image_request_uses_configured_vision_model_and_base64(tmp_path: Path
     asyncio.run(run())
 
 
+def test_vision_model_defaults_to_supported_groq_model() -> None:
+    assert Settings.for_testing().vision_model == DEFAULT_VISION_MODEL
+    assert DEFAULT_VISION_MODEL == "qwen/qwen3.8-27b"
+
+
+def test_ai_service_uses_same_configured_key_for_vision_client() -> None:
+    settings = Settings.for_testing(ai_api_key="shared-groq-key")
+    with patch("bot.ai.AsyncOpenAI") as openai_client:
+        service = AIService(settings)
+
+    openai_client.assert_called_once_with(
+        api_key="shared-groq-key",
+        base_url=settings.ai_base_url,
+        timeout=settings.ai_timeout,
+        max_retries=0,
+    )
+    assert service.client is openai_client.return_value
+
+
+def test_ai_service_logs_actual_groq_vision_error(tmp_path: Path, caplog) -> None:
+    async def run() -> None:
+        image_path = tmp_path / "sample.jpg"
+        image_path.write_bytes(b"image")
+        api_error = APIError(
+            "model qwen/qwen3.8-27b is unavailable",
+            request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"),
+            body=None,
+        )
+
+        async def create(**_request):
+            raise api_error
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        service = AIService(Settings.for_testing(), client=client)
+
+        with pytest.raises(AIUnavailable) as raised:
+            await service.analyze_image(image_path, "Describe this image.")
+
+        assert raised.value.__cause__ is api_error
+
+    asyncio.run(run())
+    assert "Groq vision request failed (APIError)" in caplog.text
+    assert "model qwen/qwen3.8-27b is unavailable" in caplog.text
+
+
 def test_image_handler_runs_ocr_and_analysis_and_escapes_html(tmp_path: Path) -> None:
     async def run() -> None:
         processed_image = tmp_path / "processed.jpg"
@@ -190,7 +241,7 @@ def test_image_handler_reports_provider_failure_friendly() -> None:
             await handle_image(update, context)
 
         assert state.stats.errors == 1
-        assert "unavailable right now" in formatted_reply.await_args.args[1]
+        assert "analyze this part of the image" in formatted_reply.await_args.args[1]
         assert "Image description." in formatted_reply.await_args.args[1]
 
     asyncio.run(run())

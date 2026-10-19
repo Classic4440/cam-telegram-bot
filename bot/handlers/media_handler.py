@@ -53,7 +53,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         ):
             if isinstance(result, AIUnavailable):
                 state.stats.errors += 1
-                content = "Sorry, image processing is unavailable right now. Please try again later."
+                content = "Sorry, I couldn't analyze this part of the image. Please try again later."
             elif isinstance(result, Exception):
                 raise result
             else:

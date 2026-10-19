@@ -99,7 +99,7 @@ Set environment variables:
 ```bash
 TELEGRAM_TOKEN=your_bot_token
 AI_API_KEY=your_groq_key
-AI_VISION_MODEL=meta-llama/llama-4-scout-17b-16e-instruct  # optional
+AI_VISION_MODEL=qwen/qwen3.8-27b  # optional; defaults to this Groq vision model
 SUPABASE_URL=optional
 SUPABASE_KEY=optional
 ```
