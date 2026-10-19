@@ -8,7 +8,7 @@ from threading import Thread
 
 from flask import Flask
 from telegram.error import Conflict, TelegramError
-from telegram.ext import Application, JobQueue, MessageHandler, filters
+from telegram.ext import Application, JobQueue, MessageHandler, Updater, filters
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from bot.ai import AIService
@@ -34,15 +34,80 @@ def _handle_polling_error(
     error: TelegramError,
     loop: asyncio.AbstractEventLoop,
     stop_event: asyncio.Event,
+    conflict_event: asyncio.Event,
 ) -> None:
     if isinstance(error, Conflict):
         logger.error(
-            "Telegram polling conflict: another bot instance is already using getUpdates. "
-            "Stopping this instance cleanly."
+            "CONFLICT: Another instance is likely running. Waiting for it to stop..."
         )
-        loop.call_soon_threadsafe(stop_event.set)
+        loop.call_soon_threadsafe(conflict_event.set)
     else:
         logger.warning("Telegram polling error: %s", error)
+
+
+async def _wait_for_polling_event(
+    stop_event: asyncio.Event,
+    conflict_event: asyncio.Event,
+) -> str:
+    stop_task = asyncio.create_task(stop_event.wait())
+    conflict_task = asyncio.create_task(conflict_event.wait())
+    try:
+        await asyncio.wait(
+            {stop_task, conflict_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        return "stop" if stop_event.is_set() else "conflict"
+    finally:
+        for task in (stop_task, conflict_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(stop_task, conflict_task, return_exceptions=True)
+
+
+async def _wait_before_polling_retry(stop_event: asyncio.Event) -> bool:
+    if stop_event.is_set():
+        return False
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=5)
+    except asyncio.TimeoutError:
+        return True
+    return False
+
+
+async def _poll_with_single_conflict_retry(
+    updater: Updater,
+    loop: asyncio.AbstractEventLoop,
+    stop_event: asyncio.Event,
+) -> None:
+    conflict_event = asyncio.Event()
+    for attempt in range(2):
+        conflict_event.clear()
+        try:
+            await updater.start_polling(
+                allowed_updates=["message", "edited_message", "channel_post"],
+                error_callback=lambda error: _handle_polling_error(
+                    error, loop, stop_event, conflict_event
+                ),
+            )
+        except Conflict:
+            logger.exception(
+                "CONFLICT: Another instance is likely running. Waiting for it to stop..."
+            )
+            if attempt == 0 and await _wait_before_polling_retry(stop_event):
+                continue
+            return
+
+        result = await _wait_for_polling_event(stop_event, conflict_event)
+        if result == "stop":
+            return
+
+        if updater.running:
+            await updater.stop()
+        if attempt == 0 and await _wait_before_polling_retry(stop_event):
+            continue
+
+        logger.error("CONFLICT: Polling still conflicts after retry; shutting down cleanly.")
+        return
 
 
 async def main() -> None:
@@ -104,13 +169,7 @@ async def main() -> None:
         async with application:
             await application.start()
             try:
-                await updater.start_polling(
-                    allowed_updates=["message", "edited_message", "channel_post"],
-                    error_callback=lambda error: _handle_polling_error(error, loop, stop_event),
-                )
-                await stop_event.wait()
-            except Conflict as error:
-                _handle_polling_error(error, loop, stop_event)
+                await _poll_with_single_conflict_retry(updater, loop, stop_event)
             finally:
                 try:
                     if updater.running:

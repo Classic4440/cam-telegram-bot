@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import _handle_polling_error
+from app import _handle_polling_error, _poll_with_single_conflict_retry
 from bot.ai import build_system_prompt
 from bot.commands.admin import cmd_myrights
 from telegram.error import Conflict
@@ -81,8 +81,45 @@ def test_polling_conflict_requests_clean_shutdown() -> None:
     async def run() -> None:
         loop = asyncio.get_running_loop()
         stop_event = asyncio.Event()
+        conflict_event = asyncio.Event()
 
-        _handle_polling_error(Conflict("terminated by other getUpdates request"), loop, stop_event)
-        await asyncio.wait_for(stop_event.wait(), timeout=1)
+        _handle_polling_error(
+            Conflict("terminated by other getUpdates request"),
+            loop,
+            stop_event,
+            conflict_event,
+        )
+        await asyncio.wait_for(conflict_event.wait(), timeout=1)
+        assert not stop_event.is_set()
+
+    asyncio.run(run())
+
+
+def test_polling_startup_conflict_retries_once_then_shutdown() -> None:
+    async def run() -> None:
+        class FakeUpdater:
+            running = False
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def start_polling(self, **_kwargs) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise Conflict("terminated by other getUpdates request")
+                stop_event.set()
+
+            async def stop(self) -> None:
+                self.running = False
+
+        updater = FakeUpdater()
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        with patch("app._wait_before_polling_retry", new=AsyncMock(return_value=True)) as wait:
+            await _poll_with_single_conflict_retry(updater, loop, stop_event)
+
+        assert updater.calls == 2
+        wait.assert_awaited_once_with(stop_event)
 
     asyncio.run(run())
