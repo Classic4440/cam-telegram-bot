@@ -1,8 +1,10 @@
 """Application version and release notes."""
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 
 RELEASE_NOTES = (
-    "Added generated content packs, scheduled reminders, stateful games, and admin command wiring. "
-    "Voice messages are transcribed and answered with conversation context and saved profile memory."
+    "Added admin-only message deletion with verified group permissions and natural-language requests "
+    "when replying to a message. Added vision-powered image text extraction and detailed descriptions. "
+    "Also includes generated content packs, scheduled reminders, stateful games, and voice transcription "
+    "with conversation context and saved profile memory."
 )

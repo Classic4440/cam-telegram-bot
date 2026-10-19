@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from telegram import Update
 from telegram.error import TelegramError
@@ -11,6 +12,12 @@ from bot.formatting import code_block, safe_reply
 from bot.registry import register
 
 logger = logging.getLogger(__name__)
+_NATURAL_DELETE_RE = re.compile(
+    r"^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+|"
+    r"i\s+(?:want|need)\s+you\s+to\s+|(?:please\s+)?)(?:please\s+)?"
+    r"(?:delete|remove)\b(?=.*\b(?:message|post|this|that|it|last|previous)\b)",
+    re.IGNORECASE,
+)
 
 
 _ADMIN_PERMISSIONS = (
@@ -101,7 +108,6 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Delete a message by replying to it with /delete."""
     message = update.message
     chat = update.effective_chat
-    user = update.effective_user
     if (
         message is None
         or message.reply_to_message is None
@@ -113,8 +119,49 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             "Usage: reply to the message you want to remove with /delete.",
         )
         return
+
+    await _delete_replied_message(update, context)
+
+
+def is_natural_delete_request(text: str) -> bool:
+    """Recognize explicit natural-language requests to delete a message."""
+    return _NATURAL_DELETE_RE.search(text) is not None
+
+
+async def handle_natural_delete_request(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.message
+    chat = update.effective_chat
+    if message is None or message.reply_to_message is None:
+        if chat is not None and chat.type in {"group", "supergroup"}:
+            response = (
+                "Reply to the message you want removed and ask me to delete it, "
+                "for example: “delete this message”. I’ll check permissions first."
+            )
+        else:
+            response = "I can only delete messages in groups, and only when the required permissions are available."
+        await safe_reply(update, response)
+        return
+
+    await _delete_replied_message(update, context)
+
+
+async def _delete_replied_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    message = update.message
+    chat = update.effective_chat
+    user = update.effective_user
+    if message is None or message.reply_to_message is None or chat is None:
+        return
     if user is None:
         await safe_reply(update, "I couldn't verify your group permissions.")
+        return
+    if chat.type not in {"group", "supergroup"}:
+        await safe_reply(update, "I can only delete messages in groups.")
         return
 
     try:

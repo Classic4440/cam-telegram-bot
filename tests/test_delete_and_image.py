@@ -12,10 +12,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.ai import AIService, build_system_prompt
-from bot.commands.admin import cmd_delete
+from bot.commands.admin import cmd_delete, is_natural_delete_request
 from bot.config import Settings
 from bot.errors import AIUnavailable
 from bot.handlers.media_handler import handle_image
+from bot.handlers.message_handler import handle_user_text
 
 
 def test_delete_requires_reply_and_admin_permissions() -> None:
@@ -198,7 +199,38 @@ def test_image_handler_reports_provider_failure_friendly() -> None:
 def test_ai_prompt_routes_telegram_actions_to_commands_without_false_admin_claims() -> None:
     prompt = build_system_prompt("default", "chat")
 
-    assert "You cannot execute Telegram API actions directly through chat" in prompt
-    assert "reply to the specific message with `/delete`" in prompt
-    assert "Never claim to have deleted a message" in prompt
+    assert "Normal chat messages can trigger implemented actions" in prompt
+    assert "do not require a slash command" in prompt
+    assert "Never claim to have performed an action unless the code confirms it" in prompt
     assert "your actual status and permissions vary by chat" in prompt
+
+
+def test_natural_language_delete_intent_is_recognized_without_slash_command() -> None:
+    assert is_natural_delete_request("Can you delete my last message?")
+    assert is_natural_delete_request("Please remove this post")
+    assert not is_natural_delete_request("How do I delete a message?")
+
+
+def test_natural_language_delete_routes_to_permission_checked_action() -> None:
+    async def run() -> None:
+        update = SimpleNamespace(
+            message=SimpleNamespace(text="Can you delete my last message?"),
+            effective_user=SimpleNamespace(id=42),
+        )
+        context = SimpleNamespace()
+
+        with (
+            patch(
+                "bot.handlers.message_handler.handle_game_text",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "bot.handlers.message_handler.handle_natural_delete_request",
+                new=AsyncMock(),
+            ) as perform,
+        ):
+            await handle_user_text(update, context, update.message.text)
+
+        perform.assert_awaited_once_with(update, context)
+
+    asyncio.run(run())

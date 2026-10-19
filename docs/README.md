@@ -40,7 +40,7 @@ cam-telegram-bot/
 │   ├── curated_games.py         # Riddles, trivia, tongue twisters (~500+ entries)
 │   ├── generate_content.md      # Content generator source
 │   └── generate_content.py      # Executable content generator
-├── tests/                        # 514 executable tests and readable Markdown sources
+├── tests/                        # 516 executable tests and readable Markdown sources
 │   ├── test_memory.py           # Profile persistence and prompt injection
 │   ├── test_delete_and_image.py # Admin message deletion and vision requests
 │   ├── test_generate_content.py
@@ -73,6 +73,7 @@ cam-telegram-bot/
 - **Model fallback chain** with retry+jitter (Groq → OpenAI → Claude)
 - **Voice transcription** support
 - **Vision-powered image OCR and description** using the configured vision model
+- **Natural-language message deletion** for replied-to messages, with administrator and bot permission checks
 
 ### Content System
 - **Deterministic seeded generation** with atomic writes
@@ -112,7 +113,7 @@ in the system prompt for AI chat and AI tasks.
 
 ## Testing
 
-Run `python -m pytest tests/` for all 514 tests. The three Markdown test files are the readable source
+Run `python -m pytest tests/` for all 516 tests. The three Markdown test files are the readable source
 copies for the generated Python test suites.
 
 ## Development Notes

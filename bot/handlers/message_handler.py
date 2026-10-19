@@ -6,6 +6,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from bot.commands.admin import handle_natural_delete_request, is_natural_delete_request
 from bot.commands.games import handle_game_text
 from bot.errors import AIUnavailable
 from bot.formatting import reply_ai
@@ -37,6 +38,10 @@ async def handle_user_text(
 
     user = update.effective_user
     if user is None:
+        return
+
+    if is_natural_delete_request(text):
+        await handle_natural_delete_request(update, context)
         return
 
     state = get_state(context)
