@@ -19,7 +19,7 @@ from bot.ai import AIService, build_system_prompt
 from bot.commands.admin import cmd_delete, is_natural_delete_request
 from bot.config import DEFAULT_VISION_MODEL, Settings
 from bot.errors import AIUnavailable
-from bot.handlers.media_handler import handle_image
+from bot.handlers.media_handler import ANALYSIS_PROMPT, OCR_PROMPT, handle_image
 from bot.handlers.message_handler import handle_user_text
 
 
@@ -164,7 +164,7 @@ def test_image_handler_runs_ocr_and_analysis_and_escapes_html(tmp_path: Path) ->
         class FakeAI:
             async def analyze_image(self, _path: Path, prompt: str) -> str:
                 prompts.append(prompt)
-                if prompt.startswith("Extract"):
+                if prompt == OCR_PROMPT:
                     return "<script>text</script>"
                 return "A detailed description."
 
@@ -194,14 +194,55 @@ def test_image_handler_runs_ocr_and_analysis_and_escapes_html(tmp_path: Path) ->
         ):
             await handle_image(update, context)
 
-        assert prompts == [
-            "Extract all text from this image. If there is no text, say 'No text found'.",
-            "Describe this image in detail.",
-        ]
+        assert prompts == [OCR_PROMPT, ANALYSIS_PROMPT]
         html_response = formatted_reply.await_args.args[1]
+        assert "<b>📝 Text detected</b>" in html_response
         assert "&lt;script&gt;text&lt;/script&gt;" in html_response
         assert "<script>" not in html_response
         assert "A detailed description." in html_response
+
+    asyncio.run(run())
+
+
+def test_image_handler_preserves_ocr_format_and_sanitizes_analysis_html(tmp_path: Path) -> None:
+    async def run() -> None:
+        processed_image = tmp_path / "processed.jpg"
+        processed_image.write_bytes(b"image")
+
+        class FakeAI:
+            async def analyze_image(self, _path: Path, prompt: str) -> str:
+                if prompt == OCR_PROMPT:
+                    return "# Receipt\n\nTea\n$3.00\nCoffee\n$4.00"
+                return "<p><b>Receipt photo</b></p><ul><li>Two items</li></ul><script>unsafe()</script>"
+
+        state = SimpleNamespace(ai=FakeAI(), stats=SimpleNamespace(errors=0))
+        message = SimpleNamespace(
+            photo=[SimpleNamespace(file_id="telegram-photo")],
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(message=message)
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={"state": state}))
+
+        with (
+            patch(
+                "bot.handlers.media_handler.download_file",
+                new=AsyncMock(return_value=tmp_path / "original.jpg"),
+            ),
+            patch(
+                "bot.handlers.media_handler.process_image",
+                return_value=(processed_image, "800x600 JPEG"),
+            ),
+            patch("bot.handlers.media_handler.reply_html", new=AsyncMock()) as formatted_reply,
+        ):
+            await handle_image(update, context)
+
+        response = formatted_reply.await_args.args[1]
+        assert "<b>Receipt</b>" in response
+        assert "Tea\n$3.00\nCoffee\n$4.00" in response
+        assert "<b>Receipt photo</b>" in response
+        assert "• Two items" in response
+        assert "unsafe()" not in response
+        assert "<script>" not in response
 
     asyncio.run(run())
 
@@ -210,7 +251,7 @@ def test_image_handler_reports_provider_failure_friendly() -> None:
     async def run() -> None:
         class FakeAI:
             async def analyze_image(self, _path: Path, prompt: str) -> str:
-                if prompt.startswith("Extract"):
+                if prompt == OCR_PROMPT:
                     raise AIUnavailable("provider failure")
                 return "Image description."
 

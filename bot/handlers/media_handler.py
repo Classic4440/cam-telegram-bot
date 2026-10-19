@@ -4,12 +4,13 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+from html.parser import HTMLParser
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.errors import AIUnavailable
-from bot.formatting import reply_html
+from bot.formatting import markdown_to_html, reply_html
 from bot.handlers.message_handler import handle_user_text
 from bot.state import get_state
 from bot.utils import (
@@ -19,6 +20,63 @@ from bot.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+OCR_PROMPT = (
+    "You are an expert OCR assistant. Extract all text from this image. You must preserve the layout, "
+    "spacing, and line breaks exactly as they appear. Use Markdown to format headings or separate "
+    "sections. Do NOT include any of your own commentary, just the extracted text."
+)
+ANALYSIS_PROMPT = (
+    "Describe this image clearly and concisely using Telegram-compatible HTML. Use bullet points for key "
+    "elements. Do not repeat the raw text extraction, just describe what is happening in the image."
+)
+_TELEGRAM_HTML_TAGS = {
+    "b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre",
+}
+
+
+class _TelegramHTMLSanitizer(HTMLParser):
+    """Keep only Telegram-supported formatting tags from vision model output."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._blocked_depth = 0
+
+    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self._blocked_depth += 1
+            return
+        if self._blocked_depth:
+            return
+        if tag in _TELEGRAM_HTML_TAGS:
+            self.parts.append(f"<{tag}>")
+        elif tag in {"br", "p", "div"}:
+            self.parts.append("\n")
+        elif tag in {"li"}:
+            self.parts.append("\n• ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"}:
+            self._blocked_depth = max(0, self._blocked_depth - 1)
+            return
+        if self._blocked_depth:
+            return
+        if tag in _TELEGRAM_HTML_TAGS:
+            self.parts.append(f"</{tag}>")
+        elif tag in {"p", "div", "li"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._blocked_depth:
+            self.parts.append(html.escape(data))
+
+
+def _format_vision_html(text: str) -> str:
+    sanitizer = _TelegramHTMLSanitizer()
+    sanitizer.feed(text)
+    sanitizer.close()
+    return "".join(sanitizer.parts).strip()
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -40,9 +98,9 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         text_result, analysis_result = await asyncio.gather(
             state.ai.analyze_image(
                 processed_path,
-                "Extract all text from this image. If there is no text, say 'No text found'.",
+                OCR_PROMPT,
             ),
-            state.ai.analyze_image(processed_path, "Describe this image in detail."),
+            state.ai.analyze_image(processed_path, ANALYSIS_PROMPT),
             return_exceptions=True,
         )
 
@@ -63,10 +121,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         response = (
             f"<b>✅ Image processed</b>\n\n"
             f"📏 Original: {html.escape(original_info)}\n\n"
-            + "\n\n".join(
-                f"<b>{title}</b>\n{html.escape(content)}"
-                for title, content in sections
-            )
+            + f"<b>{sections[0][0]}</b>\n{markdown_to_html(sections[0][1])}\n\n"
+            + f"<b>{sections[1][0]}</b>\n{_format_vision_html(sections[1][1])}"
         )
         await reply_html(update.message, response)
 
