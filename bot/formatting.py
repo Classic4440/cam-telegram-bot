@@ -135,6 +135,26 @@ def markdown_to_html(text: str) -> str:
     return re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], text)
 
 
+def html_heading(text: str) -> str:
+    """Format an escaped, Telegram-safe HTML heading."""
+    return f"<b>{html.escape(text)}</b>"
+
+
+def html_footer(text: str) -> str:
+    """Format an escaped, Telegram-safe footer."""
+    return f"<i>{html.escape(text)}</i>"
+
+
+def present_message(title: str, body: str = "", footer: str | None = None) -> str:
+    """Compose a consistent HTML message from a heading, Markdown body, and optional footer."""
+    sections = [html_heading(title)]
+    if body:
+        sections.append(markdown_to_html(body))
+    if footer:
+        sections.append(html_footer(footer))
+    return "\n\n".join(sections)
+
+
 # --------------------------------------------------------------------------------------
 # sending
 # --------------------------------------------------------------------------------------

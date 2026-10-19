@@ -20,6 +20,8 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
   - **XP**: award experience points per interaction.
   - **Error boundary**: graceful failure with user-friendly messages.
 - Dynamic `/help` and bot menu built from registry.
+- `/start` opens inline navigation to games or categorized help; game and help selections edit the existing message and acknowledge callbacks.
+- `/game` offers Rock Paper Scissors, Hangman, and Tic-Tac-Toe, with Back navigation.
 - AI system prompt auto-generated from command metadata.
 
 #### 2. **AI Service** (`bot/ai.py`)
@@ -80,7 +82,7 @@ Rich, production-grade utilities:
 - ✅ `logging_setup.py` — structured logging with redaction.
 - ✅ `cache.py` — in-memory TTL cache with circuit breaker fallback.
 - ✅ `security.py` — rate limiting (token bucket), input validation, RLS enforcement.
-- ✅ `formatting.py` — message formatting (markdown, code blocks, etc.).
+- ✅ `formatting.py` — message formatting (markdown, code blocks, reusable HTML headings and footers).
 - ✅ `store.py` — Supabase facade with circuit breaker.
 - ✅ `ai.py` — Groq integration, intent routing, conversation management.
 - ✅ `content.py` — content loader (merge curated + generated).

@@ -13,7 +13,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bot.commands.games import cmd_game, handle_game_callback
-from bot.commands.info import cmd_help, handle_help_callback
+from bot.commands.info import cmd_help, cmd_start, handle_help_callback, handle_start_callback
+from bot.formatting import html_footer, html_heading, present_message
 from bot.registry import build_handlers, discover
 
 
@@ -46,7 +47,7 @@ def _callback_update(data: str, *, user_id: int = 42) -> tuple[SimpleNamespace, 
     return update, answer, edit
 
 
-def test_game_menu_has_four_inline_game_buttons() -> None:
+def test_game_menu_has_requested_games_and_back_navigation() -> None:
     async def run() -> None:
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=42),
@@ -55,7 +56,7 @@ def test_game_menu_has_four_inline_game_buttons() -> None:
         context = _context()
         context.args = []
 
-        with patch("bot.commands.games.safe_reply", new=AsyncMock()) as reply:
+        with patch("bot.commands.games.reply_html", new=AsyncMock()) as reply:
             await cmd_game(update, context)
 
         keyboard = reply.await_args.kwargs["reply_markup"].inline_keyboard
@@ -63,9 +64,9 @@ def test_game_menu_has_four_inline_game_buttons() -> None:
             "Rock Paper Scissors",
             "Hangman",
             "Tic-Tac-Toe",
-            "Blackjack",
+            "⬅️ Back",
         ]
-        assert all(button[0].callback_data.startswith("game:42:") for button in keyboard)
+        assert all(button[0].callback_data.startswith(("game:42:", "start:42:")) for button in keyboard)
 
     asyncio.run(run())
 
@@ -122,9 +123,12 @@ def test_stale_and_other_users_game_callbacks_are_safe() -> None:
 
 def test_help_command_shows_categories_and_callback_edits_to_category() -> None:
     async def run() -> None:
-        update = SimpleNamespace(effective_user=SimpleNamespace(id=42))
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_message=SimpleNamespace(),
+        )
         context = _context()
-        with patch("bot.commands.info.safe_reply", new=AsyncMock()) as reply:
+        with patch("bot.commands.info.reply_html", new=AsyncMock()) as reply:
             await cmd_help(update, context)
 
         keyboard = reply.await_args.kwargs["reply_markup"].inline_keyboard
@@ -161,6 +165,46 @@ def test_help_callback_back_and_stale_payload_acknowledged() -> None:
         edit.assert_not_awaited()
 
     asyncio.run(run())
+
+
+def test_start_menu_buttons_and_navigation_edit_message() -> None:
+    async def run() -> None:
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_message=SimpleNamespace(),
+        )
+        with patch("bot.commands.info.reply_html", new=AsyncMock()) as reply:
+            await cmd_start(update, _context())
+
+        buttons = reply.await_args.kwargs["reply_markup"].inline_keyboard
+        assert [row[0].text for row in buttons] == ["🎮 Games", "📚 Commands & help"]
+
+        update, answer, edit = _callback_update("start:42:games")
+        await handle_start_callback(update, _context(), "42:games")
+        answer.assert_awaited_once_with()
+        assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "Rock Paper Scissors"
+
+        update, answer, edit = _callback_update("start:42:home")
+        await handle_start_callback(update, _context(), "42:home")
+        answer.assert_awaited_once_with()
+        assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🎮 Games"
+
+        update, answer, edit = _callback_update("start:42:help")
+        await handle_start_callback(update, _context(), "42:help")
+        answer.assert_awaited_once_with()
+        assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🎮 Games"
+
+    asyncio.run(run())
+
+
+def test_presentation_helpers_escape_headings_footers_and_format_body() -> None:
+    assert html_heading("<Hello>") == "<b>&lt;Hello&gt;</b>"
+    assert html_footer("Use <Back>") == "<i>Use &lt;Back&gt;</i>"
+    message = present_message("<Title>", "## Section\n\n- First item", "Footer")
+    assert message.startswith("<b>&lt;Title&gt;</b>")
+    assert "<b>Section</b>" in message
+    assert "• First item" in message
+    assert message.endswith("<i>Footer</i>")
 
 
 def test_registry_installs_callback_query_handler() -> None:

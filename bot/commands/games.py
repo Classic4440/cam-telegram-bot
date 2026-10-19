@@ -7,7 +7,7 @@ import random
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.formatting import code_block, markdown_to_html, safe_reply
+from bot.formatting import code_block, markdown_to_html, present_message, reply_html, safe_reply
 from bot.registry import callback, register
 from bot.services.dice import DiceError, roll
 from bot.services.gamelogic import Blackjack, Hangman, hand_value, ttt_best_move, ttt_winner
@@ -20,13 +20,13 @@ _BLACKJACK_KEY = "blackjack"
 _RPS_CHOICES = ("rock", "paper", "scissors")
 
 
-def _game_keyboard(user_id: int) -> InlineKeyboardMarkup:
+def game_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("Rock Paper Scissors", callback_data=f"game:{user_id}:select:rps")],
             [InlineKeyboardButton("Hangman", callback_data=f"game:{user_id}:select:hangman")],
             [InlineKeyboardButton("Tic-Tac-Toe", callback_data=f"game:{user_id}:select:ttt")],
-            [InlineKeyboardButton("Blackjack", callback_data=f"game:{user_id}:select:blackjack")],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"start:{user_id}:home")],
         ]
     )
 
@@ -148,7 +148,17 @@ async def cmd_game(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user is None:
         return
     if not context.args:
-        await safe_reply(update, "Choose a game:", reply_markup=_game_keyboard(user.id))
+        message = update.effective_message
+        if message is not None:
+            await reply_html(
+                message,
+                present_message(
+                    "🎮 Choose a game",
+                    "Select one of the games below to get started.",
+                    "Your game will open here.",
+                ),
+                reply_markup=game_menu_keyboard(user.id),
+            )
         return
 
     requested = context.args[0].strip().lower().replace("-", "").replace("_", "")
