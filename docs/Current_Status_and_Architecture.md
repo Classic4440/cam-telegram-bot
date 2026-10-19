@@ -22,6 +22,9 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
 - Dynamic `/help` and bot menu built from registry.
 - `/start` opens inline navigation to games or categorized help; game and help selections edit the existing message and acknowledge callbacks.
 - `/game` offers Rock Paper Scissors, Hangman, and Tic-Tac-Toe, with Back navigation.
+- `/help` lists every visible registered command in a category; newly added commands without a category mapping are included under Settings.
+- `/timezone` saves a selected IANA timezone in the user's Supabase profile. `/time` and `/remind` use that preference (UTC by default).
+- `/remind` supports both `/remind <when> <message>` and a two-step inline-cancelable conversation.
 - AI system prompt auto-generated from command metadata.
 
 #### 2. **AI Service** (`bot/ai.py`)
@@ -164,6 +167,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 - ✅ `bot/commands/` — auto-discovered command implementations, including `/personal` and `/update`
 - ✅ `app.py` — Telegram polling entry point with media and text handlers
 - ✅ `supabase/user_profiles.sql` — long-term memory table with row-level security enabled
+- ✅ `supabase/profile_timezone.sql` — adds the timezone preference column to `profiles` (apply this migration for durable `/timezone` preferences)
 - ✅ `requirements.txt` — runtime dependencies
 - ✅ `render.yaml` — deployment config
 
@@ -177,7 +181,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 1. **Stage 4**: Implement computed generators (trivia from Stage 2, element facts, math facts).
 2. **Stage 5**: Curated pass-through builder + Stage 1/2 test updates.
 3. **Stage 6**: Strict per-kind validation; real run to `bot/data`; loader round-trip verification.
-4. **Database**: Apply `supabase/user_profiles.sql` to enable durable user memory.
+4. **Database**: Apply `supabase/user_profiles.sql` for durable user memory and `supabase/profile_timezone.sql` for durable timezone preferences.
 5. **Deployment**: Inject `TELEGRAM_TOKEN`, `AI_API_KEY`, and optional Supabase credentials as environment secrets.
 
 ---

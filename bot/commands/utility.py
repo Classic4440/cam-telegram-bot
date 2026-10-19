@@ -2,17 +2,297 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone as utc_timezone
 
-from telegram import Update
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+)
 
 from bot.content import ContentLibrary
 from bot.formatting import safe_reply
-from bot.registry import register
-from bot.services.timeparse import TimeParseError, parse_reminder
+from bot.registry import callback, command, register
+from bot.services.timeparse import TimeParseError, get_zone, parse_reminder
+from bot.state import get_state
 
 logger = logging.getLogger(__name__)
+ASK_REMINDER_TIME, ASK_REMINDER_MESSAGE = range(2)
+_TIMEZONE_OPTIONS = (
+    ("Africa/Kampala", "Africa/Kampala (EAT)"),
+    ("Africa/Nairobi", "Africa/Nairobi (EAT)"),
+    ("UTC", "UTC"),
+    ("Europe/London", "Europe/London"),
+    ("America/New_York", "America/New York"),
+    ("Asia/Tokyo", "Asia/Tokyo"),
+)
+
+
+def _timezone_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                label,
+                callback_data=f"timezone:{user_id}:{name}",
+            )
+        ]
+        for name, label in _TIMEZONE_OPTIONS
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+async def _user_timezone(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    state = get_state(context)
+    profile = await state.store.get_profile(user_id)
+    return str(profile.get("timezone") or state.settings.default_timezone)
+
+
+@command(
+    "timezone",
+    description="Choose and save your timezone for local times and reminders",
+    category="Core",
+    usage="/timezone",
+)
+async def cmd_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Choose a timezone to save to your profile."""
+    user = update.effective_user
+    if user is None:
+        return
+    current = await _user_timezone(context, user.id)
+    await safe_reply(
+        update,
+        f"Your saved timezone is **{current}**. Choose a timezone:",
+        reply_markup=_timezone_keyboard(user.id),
+    )
+
+
+@callback("timezone")
+async def handle_timezone_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    payload: str,
+) -> None:
+    query = update.callback_query
+    parts = payload.split(":", 1)
+    try:
+        user_id = int(parts[0])
+        timezone_name = parts[1]
+    except (ValueError, IndexError):
+        await query.answer("This timezone button has expired.")
+        return
+    if update.effective_user is None or update.effective_user.id != user_id:
+        await query.answer("This timezone menu belongs to another user.", show_alert=True)
+        return
+    try:
+        get_zone(timezone_name)
+    except TimeParseError:
+        await query.answer("This timezone option is invalid.", show_alert=True)
+        return
+
+    await query.answer()
+    await get_state(context).store.set_timezone(user_id, timezone_name)
+    await query.edit_message_text(
+        f"✅ Timezone saved to your profile: {timezone_name}\n\n"
+        "Choose another timezone below to change it.",
+        reply_markup=_timezone_keyboard(user_id),
+    )
+
+
+async def _schedule_reminder(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    due: datetime,
+    message: str,
+    timezone_name: str,
+) -> bool:
+    job_queue = context.job_queue
+    chat = update.effective_chat
+    if job_queue is None or chat is None:
+        await safe_reply(update, "❌ Reminders are unavailable right now. Please try again later.")
+        return False
+
+    job_queue.run_once(
+        _send_reminder,
+        when=due.astimezone(utc_timezone.utc),
+        data={"chat_id": chat.id, "message": message},
+    )
+    local_due = due.astimezone(get_zone(timezone_name))
+    await safe_reply(
+        update,
+        f"✅ Reminder set for {local_due.strftime('%Y-%m-%d %H:%M %Z')} ({timezone_name})"
+        f"\n📝 Message: {message}",
+    )
+    return True
+
+
+async def _schedule_reminder_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+) -> None:
+    user = update.effective_user
+    if user is None:
+        return
+    try:
+        timezone_name = await _user_timezone(context, user.id)
+        due, message = parse_reminder(text, tz_name=timezone_name)
+        await _schedule_reminder(update, context, due, message, timezone_name)
+    except TimeParseError as exc:
+        await safe_reply(update, f"❌ {exc}")
+
+
+@register("remind")
+async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set a reminder; without arguments, start the cancelable guided flow."""
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        await safe_reply(
+            update,
+            "Usage: /remind [when] [message]\n"
+            "Examples: /remind 10m drink water · /remind tomorrow 9am gym",
+        )
+        return
+    await _schedule_reminder_text(update, context, text)
+
+
+async def _remind_conversation_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    text = " ".join(context.args).strip() if context.args else ""
+    if text:
+        await _schedule_reminder_text(update, context, text)
+        return ConversationHandler.END
+
+    user = update.effective_user
+    if user is None:
+        return ConversationHandler.END
+    await safe_reply(
+        update,
+        "When should I remind you? For example, `10m`, `tomorrow 9am`, or `18:30`.",
+        reply_markup=_cancel_reminder_keyboard(user.id),
+    )
+    return ASK_REMINDER_TIME
+
+
+def _cancel_reminder_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Cancel", callback_data=f"remind:cancel:{user_id}")]]
+    )
+
+
+async def _remind_receive_time(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None or not message.text:
+        return ASK_REMINDER_TIME
+    try:
+        timezone_name = await _user_timezone(context, user.id)
+        due, _ = parse_reminder(f"{message.text.strip()} reminder", tz_name=timezone_name)
+    except TimeParseError as exc:
+        await safe_reply(
+            update,
+            f"❌ {exc}\n\nPlease enter a time such as `10m` or `tomorrow 9am`, or cancel.",
+            reply_markup=_cancel_reminder_keyboard(user.id),
+        )
+        return ASK_REMINDER_TIME
+
+    context.user_data["reminder_due"] = due
+    context.user_data["reminder_timezone"] = timezone_name
+    await safe_reply(
+        update,
+        "What should I remind you about?",
+        reply_markup=_cancel_reminder_keyboard(user.id),
+    )
+    return ASK_REMINDER_MESSAGE
+
+
+async def _remind_receive_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None or not message.text or not message.text.strip():
+        if user is not None:
+            await safe_reply(
+                update,
+                "Please enter a reminder message, or cancel.",
+                reply_markup=_cancel_reminder_keyboard(user.id),
+            )
+        return ASK_REMINDER_MESSAGE
+    due = context.user_data.pop("reminder_due", None)
+    timezone_name = context.user_data.pop("reminder_timezone", None)
+    if not isinstance(due, datetime) or not isinstance(timezone_name, str):
+        await safe_reply(update, "This reminder setup expired. Please start again with /remind.")
+        return ConversationHandler.END
+
+    await _schedule_reminder(update, context, due, message.text.strip(), timezone_name)
+    context.user_data.pop("reminder_due", None)
+    context.user_data.pop("reminder_timezone", None)
+    return ConversationHandler.END
+
+
+async def _cancel_reminder_conversation(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    query = update.callback_query
+    user = update.effective_user
+    if query is None or user is None:
+        return ConversationHandler.END
+    parts = (query.data or "").split(":")
+    if len(parts) != 3 or parts[2] != str(user.id):
+        await query.answer("This cancel button belongs to another user.", show_alert=True)
+        return ASK_REMINDER_MESSAGE if context.user_data.get("reminder_due") else ASK_REMINDER_TIME
+    await query.answer()
+    context.user_data.pop("reminder_due", None)
+    context.user_data.pop("reminder_timezone", None)
+    await query.edit_message_text("Reminder setup cancelled.")
+    return ConversationHandler.END
+
+
+async def _cancel_reminder_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    context.user_data.pop("reminder_due", None)
+    context.user_data.pop("reminder_timezone", None)
+    await safe_reply(update, "Reminder setup cancelled.")
+    return ConversationHandler.END
+
+
+def build_reminder_conversation_handler() -> ConversationHandler:
+    """Create the multi-step /remind handler, including explicit cancel paths."""
+    cancel_callback = CallbackQueryHandler(
+        _cancel_reminder_conversation,
+        pattern=r"^remind:cancel:\d+$",
+    )
+    cancel_command = CommandHandler("cancel", _cancel_reminder_command)
+    return ConversationHandler(
+        entry_points=[CommandHandler("remind", _remind_conversation_start)],
+        states={
+            ASK_REMINDER_TIME: [
+                cancel_callback,
+                cancel_command,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _remind_receive_time),
+            ],
+            ASK_REMINDER_MESSAGE: [
+                cancel_callback,
+                cancel_command,
+                MessageHandler(filters.TEXT & ~filters.COMMAND, _remind_receive_message),
+            ],
+        },
+        fallbacks=[cancel_callback, cancel_command],
+        allow_reentry=True,
+    )
 
 
 async def _send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -29,36 +309,18 @@ async def _send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
 @register("time")
 async def cmd_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current time and parse time expressions."""
-    now = datetime.now()
-    response = f"⏰ **Current time**: {now.strftime('%Y-%m-%d %H:%M:%S')}"
-    await safe_reply(update, response)
-
-
-@register("remind")
-async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set a reminder."""
-    text = " ".join(context.args) if context.args else None
-    if not text:
-        await safe_reply(update, "Usage: /remind [when] [message]\nExamples:\n/remind 10m drink water\n/remind tomorrow 9am gym\n/remind 18:30 standup")
+    user = update.effective_user
+    if user is None:
         return
-
+    timezone_name = await _user_timezone(context, user.id)
     try:
-        due, message = parse_reminder(text)
-        job_queue = context.job_queue
-        chat = update.effective_chat
-        if job_queue is None or chat is None:
-            await safe_reply(update, "❌ Reminders are unavailable right now. Please try again later.")
-            return
-
-        job_queue.run_once(
-            _send_reminder,
-            when=due.astimezone(timezone.utc),
-            data={"chat_id": chat.id, "message": message},
-        )
-        response = f"✅ Reminder set for {due.strftime('%Y-%m-%d %H:%M UTC')}\n📝 Message: {message}"
-        await safe_reply(update, response)
-    except TimeParseError as e:
-        await safe_reply(update, f"❌ {e}")
+        zone = get_zone(timezone_name)
+    except TimeParseError as exc:
+        await safe_reply(update, f"❌ Your saved timezone is invalid: {exc} Use /timezone to update it.")
+        return
+    now = datetime.now(zone)
+    response = f"⏰ **Current time**: {now.strftime('%Y-%m-%d %H:%M:%S %Z')} ({timezone_name})"
+    await safe_reply(update, response)
 
 
 @register("search")

@@ -12,6 +12,7 @@ from telegram.ext import Application, JobQueue, MessageHandler, Updater, filters
 from werkzeug.serving import BaseWSGIServer, make_server
 
 from bot.ai import AIService
+from bot.commands.utility import build_reminder_conversation_handler
 from bot.config import Settings
 from bot.content import ContentLibrary
 from bot.handlers import handle_audio, handle_image, handle_message, handle_voice
@@ -114,6 +115,11 @@ async def main() -> None:
     """Load configuration and run the Telegram bot until shutdown."""
     setup_logging()
     settings = Settings.from_env()
+    if settings.concurrent_updates != 1:
+        logger.warning(
+            "Ignoring CONCURRENT_UPDATES=%d because the /remind ConversationHandler requires ordered updates",
+            settings.concurrent_updates,
+        )
 
     store = build_store(settings.supabase_url, settings.supabase_key)
     ai_service = AIService(settings, store=store)
@@ -131,7 +137,8 @@ async def main() -> None:
         Application.builder()
         .token(settings.telegram_token)
         .job_queue(JobQueue())
-        .concurrent_updates(settings.concurrent_updates)
+        # ConversationHandler requires ordered updates to maintain per-user state.
+        .concurrent_updates(False)
         .build()
     )
     if application.job_queue is None:
@@ -144,6 +151,7 @@ async def main() -> None:
         content_lib=content_library,
     )
 
+    application.add_handler(build_reminder_conversation_handler())
     for handler in build_handlers():
         application.add_handler(handler)
     application.add_handler(MessageHandler(filters.PHOTO, handle_image))

@@ -408,6 +408,10 @@ class Store:
         profile["persona"] = profile.get("persona") or "default"
         return profile
 
+    async def set_timezone(self, user_id: int, timezone_name: str) -> None:
+        """Persist the user's IANA timezone in their profile."""
+        await self._call("upsert_profile", user_id, timezone=timezone_name)
+
     async def get_user_profile(self, user_id: int) -> str:
         return await self._call("get_user_profile", user_id)
 

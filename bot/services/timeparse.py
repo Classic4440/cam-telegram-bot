@@ -21,6 +21,10 @@ _CLOCK_LEAD = re.compile(
     r"^(?:(?P<day>today|tomorrow|tonight)\s+)?(?P<at>at\s+)?(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ap>am|pm)?\b\s*(?P<rest>.*)$",
     re.I | re.S,
 )
+_ZONE_TOKEN = re.compile(
+    r"(?<!\S)((?:[A-Za-z_+-]+/)+[A-Za-z0-9._+-]+|UTC|GMT)(?!\S)",
+    re.I,
+)
 
 
 class TimeParseError(ValueError):
@@ -59,6 +63,16 @@ def parse_reminder(text: str, tz_name: str | None = None, now: datetime | None =
     if not text:
         raise TimeParseError("Tell me when and what, e.g. /remind 20m drink water")
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+    def remove_timezone(match: re.Match[str]) -> str:
+        candidate = match.group(1)
+        try:
+            get_zone(candidate)
+        except TimeParseError:
+            return candidate
+        return " "
+
+    text = _ZONE_TOKEN.sub(remove_timezone, text).strip()
     zone = get_zone(tz_name)
 
     match = _DURATION_LEAD.match(text)

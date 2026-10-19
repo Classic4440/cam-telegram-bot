@@ -25,7 +25,10 @@ _HELP_COMMANDS = {
         "time", "remind", "search", "joke", "quote", "facts", "compliment", "fortune",
     },
     "ai_media": {"translate", "image", "weather"},
-    "settings": {"start", "help", "version", "myrights", "delete", "stats", "admin", "reload"},
+    "settings": {
+        "start", "help", "version", "myrights", "delete", "stats", "admin",
+        "reload", "timezone",
+    },
 }
 
 

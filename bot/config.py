@@ -97,7 +97,7 @@ class Settings:
     keepalive_url: str | None = None
     default_timezone: str = "UTC"
     group_requires_mention: bool = True
-    concurrent_updates: int = 16
+    concurrent_updates: int = 1
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -139,7 +139,7 @@ class Settings:
             keepalive_url=keepalive,
             default_timezone=_get("DEFAULT_TIMEZONE") or "UTC",
             group_requires_mention=_get("GROUP_REQUIRES_MENTION") not in {"0", "false", "no", "off"},
-            concurrent_updates=_int("CONCURRENT_UPDATES", 16, lo=1, hi=256),
+            concurrent_updates=_int("CONCURRENT_UPDATES", 1, lo=1, hi=256),
         )
 
     @classmethod

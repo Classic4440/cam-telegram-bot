@@ -20,6 +20,7 @@ from bot.config import Settings
 from bot.content import ContentLibrary
 from bot.handlers.message_handler import handle_user_text
 from bot.services.gamelogic import Hangman
+from bot.store import Store
 
 def test_generated_content_loads_and_has_more_than_fifty_jokes() -> None:
     content = ContentLibrary()
@@ -88,8 +89,16 @@ def test_remind_schedules_job_queue_callback() -> None:
         job_queue = SimpleNamespace(
             run_once=Mock(side_effect=lambda *args, **kwargs: jobs.append((args, kwargs)))
         )
-        context = SimpleNamespace(args=["10m", "drink", "water"], job_queue=job_queue)
-        update = SimpleNamespace(effective_chat=SimpleNamespace(id=123))
+        state = SimpleNamespace(store=Store(), settings=Settings.for_testing())
+        context = SimpleNamespace(
+            args=["10m", "drink", "water"],
+            job_queue=job_queue,
+            application=SimpleNamespace(bot_data={"state": state}),
+        )
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_chat=SimpleNamespace(id=123),
+        )
 
         with patch("bot.commands.utility.safe_reply", new=AsyncMock()) as reply:
             await cmd_remind(update, context)

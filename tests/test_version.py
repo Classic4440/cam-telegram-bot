@@ -37,5 +37,7 @@ def test_version_command_is_registered_and_returns_release_notes() -> None:
         assert "natural-language requests" in RELEASE_NOTES
         assert "Qwen 3.8 27B vision model" in RELEASE_NOTES
         assert "group permission reporting" in RELEASE_NOTES
+        assert "timezone preferences" in RELEASE_NOTES
+        assert "guided reminder conversation" in RELEASE_NOTES
 
     asyncio.run(run())
