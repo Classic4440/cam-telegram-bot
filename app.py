@@ -7,6 +7,7 @@ import signal
 from threading import Thread
 
 from flask import Flask
+from telegram.error import Conflict, TelegramError
 from telegram.ext import Application, JobQueue, MessageHandler, filters
 from werkzeug.serving import BaseWSGIServer, make_server
 
@@ -27,6 +28,21 @@ health_app = Flask(__name__)
 @health_app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _handle_polling_error(
+    error: TelegramError,
+    loop: asyncio.AbstractEventLoop,
+    stop_event: asyncio.Event,
+) -> None:
+    if isinstance(error, Conflict):
+        logger.error(
+            "Telegram polling conflict: another bot instance is already using getUpdates. "
+            "Stopping this instance cleanly."
+        )
+        loop.call_soon_threadsafe(stop_event.set)
+    else:
+        logger.warning("Telegram polling error: %s", error)
 
 
 async def main() -> None:
@@ -89,9 +105,12 @@ async def main() -> None:
             await application.start()
             try:
                 await updater.start_polling(
-                    allowed_updates=["message", "edited_message", "channel_post"]
+                    allowed_updates=["message", "edited_message", "channel_post"],
+                    error_callback=lambda error: _handle_polling_error(error, loop, stop_event),
                 )
                 await stop_event.wait()
+            except Conflict as error:
+                _handle_polling_error(error, loop, stop_event)
             finally:
                 try:
                     if updater.running:

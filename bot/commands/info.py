@@ -66,6 +66,7 @@ Send voice - Voice message transcription + TTS reply
 /start - This message
 /help - Commands (this message)
 /version - Bot version and release notes
+/myrights - Check my status and permissions in this group
 /stats - Bot statistics
 /admin - Admin panel
 
