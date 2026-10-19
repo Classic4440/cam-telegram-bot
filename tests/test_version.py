@@ -35,6 +35,7 @@ def test_version_command_is_registered_and_returns_release_notes() -> None:
         assert f"Version {__version__}" in replies[0]
         assert RELEASE_NOTES in replies[0]
         assert "natural-language requests" in RELEASE_NOTES
-        assert "vision-powered image text extraction" in RELEASE_NOTES
+        assert "Qwen 3.8 27B vision model" in RELEASE_NOTES
+        assert "group permission reporting" in RELEASE_NOTES
 
     asyncio.run(run())
