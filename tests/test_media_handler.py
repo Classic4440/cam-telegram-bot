@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from bot.ai import AIService, ChatResult
 from bot.config import Settings
-from bot.handlers.media_handler import handle_voice
+from bot.handlers.media_handler import ANALYSIS_PROMPT, OCR_PROMPT, handle_image, handle_voice
 from bot.security import TokenBucketLimiter
 from bot.store import Store
 
@@ -130,5 +131,84 @@ def test_voice_transcription_failure_replies_without_chat() -> None:
 
         assert state.stats.errors == 1
         assert any("couldn't transcribe" in reply for reply in replies)
+
+    asyncio.run(run())
+
+
+def test_analyze_image_sends_base64_to_configured_vision_model(tmp_path: Path) -> None:
+    async def run() -> None:
+        image_path = tmp_path / "image.png"
+        image_path.write_bytes(b"image bytes")
+        requests: list[dict] = []
+
+        async def create(**request):
+            requests.append(request)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="  Image description.  "))]
+            )
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        settings = Settings.for_testing(vision_model="qwen/qwen3.8-27b")
+        service = AIService(settings, client=client)
+
+        result = await service.analyze_image(image_path, "Describe this image.")
+
+        assert result == "Image description."
+        assert requests[0]["model"] == "qwen/qwen3.8-27b"
+        content = requests[0]["messages"][0]["content"]
+        assert content[0] == {"type": "text", "text": "Describe this image."}
+        image_url = content[1]["image_url"]["url"]
+        assert image_url == f"data:image/png;base64,{base64.b64encode(b'image bytes').decode()}"
+
+    asyncio.run(run())
+
+
+def test_image_handler_reports_each_vision_failure_independently(tmp_path: Path) -> None:
+    async def run() -> None:
+        processed_image = tmp_path / "processed.jpg"
+        processed_image.write_bytes(b"image")
+
+        class FakeAI:
+            async def analyze_image(self, _path: Path, prompt: str) -> str:
+                if prompt == OCR_PROMPT:
+                    raise RuntimeError("OCR unavailable")
+                assert prompt == ANALYSIS_PROMPT
+                return "<p>Image is a blue sky.</p>"
+
+        state = SimpleNamespace(
+            ai=FakeAI(),
+            stats=SimpleNamespace(errors=0),
+            limiter=TokenBucketLimiter(10, 2),
+        )
+        message = SimpleNamespace(
+            photo=[SimpleNamespace(file_id="telegram-photo")],
+            reply_text=AsyncMock(),
+        )
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_user=SimpleNamespace(id=42),
+        )
+        context = SimpleNamespace(application=SimpleNamespace(bot_data={"state": state}))
+
+        with (
+            patch(
+                "bot.handlers.media_handler.download_file",
+                new=AsyncMock(return_value=tmp_path / "original.jpg"),
+            ),
+            patch(
+                "bot.handlers.media_handler.process_image",
+                return_value=(processed_image, "800x600 JPEG"),
+            ),
+            patch("bot.handlers.media_handler.reply_html", new=AsyncMock()) as formatted_reply,
+        ):
+            await handle_image(update, context)
+
+        response = formatted_reply.await_args.args[1]
+        assert state.stats.errors == 1
+        assert "analyze this part of the image" in response
+        assert "Image is a blue sky." in response
 
     asyncio.run(run())

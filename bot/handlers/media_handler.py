@@ -6,14 +6,14 @@ import html
 import logging
 import math
 from html.parser import HTMLParser
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from bot.errors import AIUnavailable
 from bot.formatting import markdown_to_html, reply_html
 from bot.handlers.message_handler import handle_user_text
-from bot.state import get_state
+from bot.state import AppState, get_state
 from bot.utils import (
     MediaError,
     download_file,
@@ -95,6 +95,15 @@ async def _allow_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     return True
 
 
+async def _analyze_image_section(state: AppState, path: Path, prompt: str, title: str) -> str:
+    try:
+        return await state.ai.analyze_image(path, prompt)
+    except Exception:
+        state.stats.errors += 1
+        logger.exception("Image %s request failed", title)
+        return "Sorry, I couldn't analyze this part of the image. Please try again later."
+
+
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle image messages: resize, analyze, OCR."""
     if not update.message or not update.message.photo:
@@ -102,6 +111,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not await _allow_media(update, context):
         return
 
+    state = get_state(context)
     try:
         photo = update.message.photo[-1]  # Get highest quality
         await update.message.reply_text("📸 Processing image...")
@@ -112,43 +122,28 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Process (resize)
         processed_path, original_info = process_image(local_path)
 
-        state = get_state(context)
         text_result, analysis_result = await asyncio.gather(
-            state.ai.analyze_image(
-                processed_path,
-                OCR_PROMPT,
-            ),
-            state.ai.analyze_image(processed_path, ANALYSIS_PROMPT),
-            return_exceptions=True,
+            _analyze_image_section(state, processed_path, OCR_PROMPT, "OCR"),
+            _analyze_image_section(state, processed_path, ANALYSIS_PROMPT, "analysis"),
         )
-
-        sections: list[tuple[str, str]] = []
-        for title, result in (
-            ("📝 Text detected", text_result),
-            ("🤖 Analysis", analysis_result),
-        ):
-            if isinstance(result, AIUnavailable):
-                state.stats.errors += 1
-                content = "Sorry, I couldn't analyze this part of the image. Please try again later."
-            elif isinstance(result, Exception):
-                raise result
-            else:
-                content = result
-            sections.append((title, content))
 
         response = (
             f"<b>✅ Image processed</b>\n\n"
             f"📏 Original: {html.escape(original_info)}\n\n"
-            + f"<b>{sections[0][0]}</b>\n{markdown_to_html(sections[0][1])}\n\n"
-            + f"<b>{sections[1][0]}</b>\n{_format_vision_html(sections[1][1])}"
+            + f"<b>📝 Text detected</b>\n{markdown_to_html(text_result)}\n\n"
+            + f"<b>🤖 Analysis</b>\n{_format_vision_html(analysis_result)}"
         )
         await reply_html(update.message, response)
 
-    except MediaError as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-    except Exception as e:
+    except MediaError as exc:
+        await update.message.reply_text(f"❌ Error: {exc}")
+    except Exception:
+        state.stats.errors += 1
         logger.exception("Image handler failed")
-        await update.message.reply_text("❌ Failed to process image")
+        await reply_html(
+            update.message,
+            "<b>❌ Failed to process image.</b>\nPlease try again with a different image.",
+        )
 
 
 async def _handle_audio_message(

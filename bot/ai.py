@@ -351,6 +351,8 @@ class AIService:
         except OSError as exc:
             logger.exception("Could not read image for vision analysis")
             raise AIUnavailable("image could not be read") from exc
+        if not image_data:
+            raise AIUnavailable("image file is empty")
 
         mime_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
         data_url = f"data:{mime_type};base64,{base64.b64encode(image_data).decode('ascii')}"
@@ -376,7 +378,7 @@ class AIService:
                 ),
                 timeout=self.settings.ai_timeout + 5,
             )
-        except (APIError, asyncio.TimeoutError) as exc:
+        except Exception as exc:
             logger.exception(
                 "Groq vision request failed (%s): %s",
                 type(exc).__name__,
@@ -385,7 +387,12 @@ class AIService:
             self.failures += 1
             raise AIUnavailable("vision model request failed") from exc
 
-        text = (completion.choices[0].message.content or "").strip()
+        try:
+            text = (completion.choices[0].message.content or "").strip()
+        except (AttributeError, IndexError, TypeError) as exc:
+            logger.exception("Groq vision response had an unexpected shape")
+            self.failures += 1
+            raise AIUnavailable("vision model returned an invalid response") from exc
         if not text:
             self.failures += 1
             raise AIUnavailable("vision model returned an empty response")
