@@ -1,25 +1,135 @@
 """Persistence layer.
 
 * ``MemoryBackend``   - process-local fallback (also used by tests).  Data is lost on restart.
-* ``SupabaseBackend`` - durable Postgres via Supabase (see ``supabase/schema.sql``).
-* ``Store``           - async facade.  Calls Supabase in a worker thread, trips a circuit breaker after
-                        repeated failures, and transparently falls back to memory so a database
-                        outage degrades features instead of crashing the bot.
+* ``SupabaseBackend`` - durable Postgres via Supabase (see ``supabase/migrations/``).
+* ``Store``           - async facade. Calls Supabase in a worker thread, classifies database errors,
+                        and uses explicitly reported in-memory fallback only for transient outages.
 
 All backend methods are synchronous; the facade owns threading.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import itertools
+import json
 import logging
 import math
+import re
 import threading
 import time
 from collections import defaultdict, deque
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+class PersistenceFailure(RuntimeError):
+    """A classified error that prevented a remote persistence operation."""
+
+    def __init__(
+        self,
+        method: str,
+        category: str,
+        *,
+        code: str | None = None,
+        fallback_applied: bool = False,
+        completed_user_ids: frozenset[int] = frozenset(),
+    ) -> None:
+        self.method = method
+        self.category = category
+        self.code = code
+        self.fallback_applied = fallback_applied
+        self.completed_user_ids = completed_user_ids
+        if fallback_applied:
+            message = (
+                f"Supabase is temporarily unavailable during {method}; this operation was kept "
+                "in memory only and may be lost when the bot restarts."
+            )
+        elif completed_user_ids:
+            message = (
+                f"Some {method} updates completed before the failure; remaining updates are queued "
+                "in memory and may be lost when the bot restarts."
+            )
+        elif category == "schema":
+            message = (
+                f"Supabase schema is missing or stale during {method}; the operation was not persisted. "
+                "Apply the bot persistence migration and reload the API schema."
+            )
+        elif category == "permission":
+            message = (
+                f"Supabase denied {method}; the operation was not persisted. Check the server-side "
+                "service_role key and database grants."
+            )
+        elif category == "transient":
+            message = f"Supabase is unavailable during {method}; the operation was not persisted."
+        else:
+            message = f"Supabase rejected {method}; the operation was not persisted. Check server logs."
+        super().__init__(message)
+
+
+class _XPFlushError(Exception):
+    def __init__(self, cause: Exception, completed_user_ids: set[int]) -> None:
+        self.original_error = cause
+        self.completed_user_ids = frozenset(completed_user_ids)
+        super().__init__("XP batch flush failed")
+
+
+_WRITE_METHODS = frozenset(
+    {
+        "save_turn",
+        "clear_history",
+        "upsert_profile",
+        "save_user_profile",
+        "flush_xp",
+        "add_todo",
+        "set_todo_done",
+        "delete_todo",
+        "clear_done_todos",
+        "add_note",
+        "delete_note",
+        "add_reminder",
+        "mark_reminder_sent",
+        "cancel_reminder",
+    }
+)
+_CODE_RE = re.compile(r"\b(PGRST\d{3}|42501)\b")
+
+
+def _database_error_details(exc: Exception) -> tuple[str, str | None, int | None]:
+    """Classify provider errors without logging response bodies or credentials."""
+    source = getattr(exc, "original_error", exc)
+    code_value = getattr(source, "code", None)
+    code = str(code_value) if code_value is not None else None
+    status_value = getattr(source, "status_code", None)
+    response = getattr(source, "response", None)
+    if status_value is None and response is not None:
+        status_value = getattr(response, "status_code", None)
+    try:
+        status = int(status_value) if status_value is not None else None
+    except (TypeError, ValueError):
+        status = None
+
+    safe_message = str(getattr(source, "message", "") or source)
+    match = _CODE_RE.search(safe_message)
+    if code is None and match:
+        code = match.group(1)
+    message = safe_message.lower()
+
+    if code in {"PGRST202", "PGRST205"} or "schema cache" in message:
+        return "schema", code, status
+    if code == "42501" or status in {401, 403} or "permission denied" in message:
+        return "permission", code, status
+    if (
+        status in {408, 425, 429}
+        or (status is not None and status >= 500)
+        or isinstance(source, (TimeoutError, ConnectionError, OSError))
+        or type(source).__module__.startswith(("httpx", "httpcore", "requests", "urllib3"))
+    ):
+        return "transient", code, status
+    return "database", code, status
 
 
 def level_for(xp: int) -> int:
@@ -245,13 +355,18 @@ class SupabaseBackend:
         ).execute()
 
     def flush_xp(self, deltas: dict[int, int], names: dict[int, str]) -> None:
+        completed_user_ids: set[int] = set()
         for user_id, amount in deltas.items():
             parameters = {
                 "p_user_id": user_id,
                 "p_username": names.get(user_id),
                 "p_amount": amount,
             }
-            self.client.rpc("add_xp", parameters).execute()
+            try:
+                self.client.rpc("add_xp", parameters).execute()
+            except Exception as exc:  # noqa: BLE001 - retain acknowledgment of prior per-user RPCs
+                raise _XPFlushError(exc, completed_user_ids) from exc
+            completed_user_ids.add(user_id)
 
     def leaderboard(self, limit: int) -> list[dict[str, Any]]:
         return (
@@ -339,7 +454,10 @@ class _Breaker:
         if self.failures >= self.threshold:
             self.open_until = time.monotonic() + self.cooldown
             self.failures = 0
-            logger.error("Supabase circuit opened for %.0fs; using in-memory fallback", self.cooldown)
+            logger.error(
+                "Supabase circuit opened for %.0fs; persistence operations will use guarded fallback",
+                self.cooldown,
+            )
 
 
 class Store:
@@ -349,24 +467,110 @@ class Store:
         self.remote = remote
         self.local = MemoryBackend()
         self._breaker = _Breaker()
+        self._configuration_failure: tuple[str, str | None] | None = None
+        self._last_transient_failure: tuple[str | None, int | None] | None = None
         self._xp: dict[int, int] = defaultdict(int)
         self._names: dict[int, str] = {}
         self._xp_lock = threading.Lock()
 
     @property
     def durable(self) -> bool:
-        return self.remote is not None and self._breaker.allow()
+        return (
+            self.remote is not None
+            and self._configuration_failure is None
+            and self._last_transient_failure is None
+            and self._breaker.allow()
+        )
+
+    def _raise_persistent_failure(
+        self,
+        method: str,
+        completed_user_ids: frozenset[int] = frozenset(),
+    ) -> None:
+        if self._configuration_failure is not None:
+            category, code = self._configuration_failure
+            raise PersistenceFailure(
+                method,
+                category,
+                code=code,
+                completed_user_ids=completed_user_ids,
+            )
+        if self._last_transient_failure is not None:
+            code, _status = self._last_transient_failure
+            raise PersistenceFailure(
+                method,
+                "transient",
+                code=code,
+                fallback_applied=method in _WRITE_METHODS and method != "flush_xp",
+                completed_user_ids=completed_user_ids,
+            )
+
+    def _fallback(
+        self,
+        method: str,
+        *args: Any,
+        completed_user_ids: frozenset[int] = frozenset(),
+        **kwargs: Any,
+    ) -> Any:
+        if method in _WRITE_METHODS:
+            logger.warning(
+                "Supabase write %s cannot be persisted; applying guarded in-memory fallback",
+                method,
+            )
+            if method != "flush_xp":
+                getattr(self.local, method)(*args, **kwargs)
+            self._raise_persistent_failure(method, completed_user_ids)
+        logger.warning(
+            "Supabase read %s is using in-memory fallback; returned data may be stale",
+            method,
+        )
+        return getattr(self.local, method)(*args, **kwargs)
 
     async def _call(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        if self.remote is not None and self._breaker.allow():
-            try:
-                result = await asyncio.to_thread(getattr(self.remote, method), *args, **kwargs)
-                self._breaker.ok()
-                return result
-            except Exception:  # noqa: BLE001 - any backend failure degrades to memory
+        if self.remote is None:
+            return getattr(self.local, method)(*args, **kwargs)
+        if self._configuration_failure is not None:
+            self._raise_persistent_failure(method)
+        if not self._breaker.allow():
+            return self._fallback(method, *args, **kwargs)
+
+        try:
+            result = await asyncio.to_thread(getattr(self.remote, method), *args, **kwargs)
+        except Exception as exc:  # noqa: BLE001 - provider exception types vary by SDK version
+            category, code, status = _database_error_details(exc)
+            exception_type = type(getattr(exc, "original_error", exc)).__name__
+            completed_user_ids = getattr(exc, "completed_user_ids", frozenset())
+            logger.error(
+                "Supabase %s failure in %s (code=%s, status=%s, exception=%s)",
+                category,
+                method,
+                code or "unknown",
+                status if status is not None else "unknown",
+                exception_type,
+            )
+            if category in {"schema", "permission"}:
+                self._configuration_failure = (category, code)
+                self._raise_persistent_failure(method, completed_user_ids)
+
+            if category == "transient":
+                self._last_transient_failure = (code, status)
                 self._breaker.fail()
-                logger.exception("Supabase call %s failed; falling back to memory", method)
-        return getattr(self.local, method)(*args, **kwargs)
+                return self._fallback(
+                    method,
+                    *args,
+                    completed_user_ids=completed_user_ids,
+                    **kwargs,
+                )
+            raise PersistenceFailure(
+                method,
+                category,
+                code=code,
+                completed_user_ids=completed_user_ids,
+            ) from exc
+
+        self._breaker.ok()
+        self._last_transient_failure = None
+        return result
 
     # history
     async def load_history(self, user_id: int, limit: int) -> list[dict[str, str]]:
@@ -395,11 +599,19 @@ class Store:
             return 0
         try:
             await self._call("flush_xp", deltas, names)
-        except Exception:  # noqa: BLE001
-            logger.exception("XP flush failed; re-queueing")
+        except PersistenceFailure as exc:
+            remaining = 0
             with self._xp_lock:
                 for uid, amount in deltas.items():
-                    self._xp[uid] += amount
+                    if uid not in exc.completed_user_ids:
+                        self._xp[uid] += amount
+                        remaining += 1
+            logger.error(
+                "%s; %s users' XP deltas remain queued in memory",
+                exc,
+                remaining,
+            )
+            return len(exc.completed_user_ids)
         return len(deltas)
 
     async def get_profile(self, user_id: int) -> dict[str, Any]:
@@ -470,10 +682,50 @@ class Store:
 
 
 def build_store(url: str | None, key: str | None) -> Store:
-    """Create a Store; Supabase is optional so the bot still boots without it."""
-    if not (url and key):
-        logger.warning("SUPABASE_URL/SUPABASE_KEY not set: history, todos and reminders will not survive restarts")
+    """Create the store, rejecting known public Supabase keys for this private server app."""
+    if not url and not key:
+        logger.warning(
+            "Supabase is not configured; persistence writes are process-local and may be lost on restart"
+        )
         return Store(None)
+    if not url or not key:
+        raise RuntimeError("Set both SUPABASE_URL and SUPABASE_KEY to enable Supabase persistence.")
+
+    key_kind = _supabase_key_kind(key)
+    if key_kind == "public":
+        raise RuntimeError(
+            "SUPABASE_KEY is a public/anon key. Configure a server-side Supabase service_role secret "
+            "in Render; public keys are not accepted for this private bot."
+        )
+    if key_kind == "unknown":
+        logger.warning(
+            "Supabase key role could not be identified; verify SUPABASE_KEY is a server-side service_role secret"
+        )
+    host = urlparse(url).hostname or "<invalid-host>"
+    logger.info("Supabase configuration present (host=%s, key_kind=%s)", host, key_kind)
+
     from supabase import create_client
 
     return Store(SupabaseBackend(create_client(url, key)))
+
+
+def _supabase_key_kind(key: str) -> str:
+    """Return only a safe key classification; never return or log the key itself."""
+    if key.startswith("sb_secret_"):
+        return "server-secret"
+    if key.startswith("sb_publishable_"):
+        return "public"
+    parts = key.split(".")
+    if len(parts) != 3:
+        return "unknown"
+    try:
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return "unknown"
+    role = claims.get("role") if isinstance(claims, dict) else None
+    if role == "service_role":
+        return "service-role"
+    if role in {"anon", "authenticated"}:
+        return "public"
+    return "unknown"

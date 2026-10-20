@@ -3,7 +3,7 @@ from pathlib import Path
 
 def test_supabase_store_schema_covers_store_columns_and_access_policy() -> None:
     schema_path = Path(__file__).resolve().parents[1] / "supabase" / "bot_store_schema.sql"
-    schema = schema_path.read_text(encoding="utf-8").lower()
+    schema = " ".join(schema_path.read_text(encoding="utf-8").lower().split())
 
     for declaration in (
         "create table if not exists public.profiles",
@@ -23,4 +23,31 @@ def test_supabase_store_schema_covers_store_columns_and_access_policy() -> None:
         assert declaration in schema
 
     assert "grant select, insert, update, delete on public.profiles, public.notes to service_role" in schema
-    assert "from anon, authenticated" in schema
+    assert "from public, anon, authenticated" in schema
+    assert "using (true)" not in schema
+    assert "with check (true)" not in schema
+
+
+def test_versioned_migration_covers_all_remote_store_tables_and_secure_access() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "supabase"
+        / "migrations"
+        / "20261020_01_bot_persistence.sql"
+    ).read_text(encoding="utf-8").lower()
+    migration = " ".join(migration.split())
+
+    for table in ("profiles", "notes", "user_profiles", "chat_history", "todos", "reminders"):
+        assert f"create table if not exists public.{table}" in migration
+    assert "p_user_id bigint" in migration
+    assert "p_username text" in migration
+    assert "p_amount integer" in migration
+    assert "security definer" in migration
+    assert "set search_path = pg_catalog, public" in migration
+    assert "grant execute on function public.add_xp(bigint, text, integer) to service_role" in migration
+    assert "revoke all on public.profiles, public.notes, public.user_profiles" in migration
+    assert "from public, anon, authenticated" in migration
+    assert "notify pgrst, 'reload schema'" in migration
+    assert "using (true)" not in migration
+    assert "with check (true)" not in migration
+    assert "drop table" not in migration

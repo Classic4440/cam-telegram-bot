@@ -19,6 +19,7 @@ from bot.formatting import safe_reply
 from bot.registry import callback, command, register
 from bot.services.timeparse import TimeParseError, get_zone, parse_reminder
 from bot.state import get_state
+from bot.store import PersistenceFailure
 
 logger = logging.getLogger(__name__)
 ASK_REMINDER_TIME, ASK_REMINDER_MESSAGE = range(2)
@@ -92,9 +93,19 @@ async def handle_timezone_callback(
         await query.edit_message_text("This timezone option is invalid. Send /timezone to choose again.")
         return
 
-    await get_state(context).store.set_timezone(user_id, timezone_name)
+    store = get_state(context).store
+    try:
+        await store.set_timezone(user_id, timezone_name)
+    except PersistenceFailure as exc:
+        await query.edit_message_text(str(exc))
+        return
+    saved_status = (
+        "Timezone saved to your profile"
+        if store.durable
+        else "Timezone set for this process only; it may be lost when the bot restarts"
+    )
     await query.edit_message_text(
-        f"✅ Timezone saved to your profile: {timezone_name}\n\n"
+        f"✅ {saved_status}: {timezone_name}\n\n"
         "Choose another timezone below to change it.",
         reply_markup=_timezone_keyboard(user_id),
     )

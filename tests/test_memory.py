@@ -41,7 +41,7 @@ def test_personal_commands_save_and_display_profile() -> None:
         await update_profile(update, context)
 
         assert replies == [
-            "Got it! I'll remember that.",
+            "Got it! I'll remember that. I can use it until this bot process restarts, but it isn't saved permanently.",
             "Here is what I remember about you: Likes astronomy",
         ]
 

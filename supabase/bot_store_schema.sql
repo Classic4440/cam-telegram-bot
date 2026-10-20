@@ -29,25 +29,13 @@ create index if not exists notes_user_id_id_idx
 alter table public.profiles enable row level security;
 alter table public.notes enable row level security;
 
-revoke all on public.profiles, public.notes from anon, authenticated;
-grant select, insert, update, delete on public.profiles, public.notes to service_role;
+revoke all on public.profiles, public.notes from public, anon, authenticated;
+grant select, insert, update, delete
+    on public.profiles, public.notes to service_role;
 grant usage, select on sequence public.notes_id_seq to service_role;
 
 drop policy if exists profiles_service_role_all on public.profiles;
-create policy profiles_service_role_all
-    on public.profiles
-    for all
-    to service_role
-    using (true)
-    with check (true);
-
 drop policy if exists notes_service_role_all on public.notes;
-create policy notes_service_role_all
-    on public.notes
-    for all
-    to service_role
-    using (true)
-    with check (true);
 
 create or replace function public.add_xp(
     p_user_id bigint,
@@ -57,7 +45,7 @@ create or replace function public.add_xp(
 returns void
 language sql
 security definer
-set search_path = public
+set search_path = pg_catalog, public
 as $$
     insert into public.profiles (user_id, username, xp)
     values (p_user_id, p_username, p_amount)
@@ -67,6 +55,7 @@ as $$
             updated_at = now();
 $$;
 
+alter function public.add_xp(bigint, text, integer) owner to postgres;
 revoke all on function public.add_xp(bigint, text, integer) from public, anon, authenticated;
 grant execute on function public.add_xp(bigint, text, integer) to service_role;
 

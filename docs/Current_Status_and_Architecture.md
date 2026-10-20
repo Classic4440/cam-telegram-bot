@@ -40,10 +40,10 @@ This is a **high-power, modular Telegram bot** built with python-telegram-bot 22
 
 #### 3. **Store Facade** (`bot/store.py`)
 - **Supabase Backend**: PostgreSQL with RLS.
-- **Circuit Breaker**: failover to in-memory cache on outage.
+- **Circuit Breaker**: transient reads may use in-memory fallback; writes report when they were not persisted and are only in memory.
 - **Caching Layer** (`bot/cache.py`): local in-memory with TTL.
-- **Security**: RLS policies, prepared statements, least privilege.
-- **User profiles**: `/personal` and `/update` persist profile data in Supabase with an in-memory fallback.
+- **Security**: private bot data is granted only to the server-side `service_role`; RLS stays enabled and no public access policy is created.
+- **User profiles**: `/personal` and `/update` persist profile data in Supabase when configured; memory-only writes are identified to users.
 
 #### 4. **Content System** (`bot/content.py`)
 - Loads curated (`<kind>.json`) and generated (`<kind>.generated.json`) content.
@@ -172,6 +172,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 - ✅ `supabase/bot_store_schema.sql` — defines the `profiles` and `notes` tables and the XP RPC used by the Store
 - ✅ `supabase/profile_timezone.sql` — creates/upgrades the profile table fields, including timezone
 - ✅ `supabase/saved_notes.sql` — creates the RLS-protected notes table (apply for durable `/save` notes)
+- ✅ `supabase/migrations/20261020_01_bot_persistence.sql` — versioned, additive schema/access contract for all current Store tables and XP RPC
 - ✅ `requirements.txt` — runtime dependencies
 - ✅ `render.yaml` — deployment config
 
@@ -185,7 +186,7 @@ Groq is fast & cheap. Fallback chain ensures the bot remains functional if Groq 
 1. **Stage 4**: Implement computed generators (trivia from Stage 2, element facts, math facts).
 2. **Stage 5**: Curated pass-through builder + Stage 1/2 test updates.
 3. **Stage 6**: Strict per-kind validation; real run to `bot/data`; loader round-trip verification.
-4. **Database**: Apply `supabase/user_profiles.sql` for durable user memory and `supabase/bot_store_schema.sql` for `profiles`, `notes`, timezone preferences, XP, and the corresponding service-role policies.
+4. **Database**: Review and apply `supabase/migrations/20261020_01_bot_persistence.sql` for the current Store schema, private service-role grants, and the XP RPC. Do not apply legacy bootstrap SQL in place of the versioned migration.
 5. **Deployment**: Inject `TELEGRAM_TOKEN`, `AI_API_KEY`, and optional Supabase credentials as environment secrets.
 
 ---

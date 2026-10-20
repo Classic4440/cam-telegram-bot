@@ -18,6 +18,7 @@ from bot.registry import callback
 from bot.registry import command_summary
 from bot.security import sanitize_text
 from bot.state import get_state
+from bot.store import PersistenceFailure
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ async def handle_user_text(
         await handle_natural_delete_request(update, context)
         return
 
+    persistence_warning: str | None = None
     try:
         async with state.user_lock(user.id):
             history = await state.store.load_history(user.id, state.settings.history_messages)
@@ -83,12 +85,15 @@ async def handle_user_text(
                 user_id=user.id,
                 commands=command_summary(),
             )
-            await state.store.save_turn(user.id, sanitized_text, result.text)
+            try:
+                await state.store.save_turn(user.id, sanitized_text, result.text)
+            except PersistenceFailure as exc:
+                persistence_warning = str(exc)
             state.stats.messages += 1
             state.stats.ai_chats += 1
         sent = await reply_ai(
             update.message,
-            result.text,
+            result.text + (f"\n\n⚠️ {persistence_warning}" if persistence_warning else ""),
             reply_markup=_regenerate_keyboard(user.id),
         )
         if sent is not None:
@@ -102,6 +107,10 @@ async def handle_user_text(
         state.stats.errors += 1
         logger.warning("AI is unavailable for user %s", user.id)
         await reply_ai(update.message, "The AI is unavailable right now. Please try again shortly.")
+    except PersistenceFailure as exc:
+        state.stats.errors += 1
+        logger.error("Chat persistence failed for user %s: %s", user.id, exc)
+        await reply_ai(update.message, str(exc))
     except Exception:
         state.stats.errors += 1
         logger.exception("Message handler failed")

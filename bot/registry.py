@@ -29,6 +29,7 @@ from telegram.ext import CallbackQueryHandler, CommandHandler
 from .errors import AIUnavailable, UserError
 from .formatting import reply
 from .state import get_state
+from .store import PersistenceFailure
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,10 @@ def _wrap(spec: CommandSpec) -> Handler:
             await spec.handler(update, context)
         except UserError as exc:
             await reply(message, exc.message)
+        except PersistenceFailure as exc:
+            state.stats.errors += 1
+            logger.error("Persistence failure in /%s: %s", spec.name, exc)
+            await _safe_reply(message, str(exc))
         except AIUnavailable:
             await reply(message, "🤖 The AI is busy right now. Please try again in a moment.")
         except TelegramError:
@@ -219,6 +224,14 @@ async def dispatch_callback(update, context) -> None:
         await handler(update, context, payload)
     except UserError as exc:
         await _answer(query, exc.message)
+    except PersistenceFailure as exc:
+        logger.error("Persistence failure in callback routing: %s", exc)
+        if state is not None:
+            state.stats.errors += 1
+        try:
+            await query.answer(text=str(exc)[:190], show_alert=True)
+        except TelegramError:
+            logger.exception("Could not show persistence error alert")
     except Exception:  # noqa: BLE001
         logger.exception("Unhandled callback routing error")
         if state is not None:

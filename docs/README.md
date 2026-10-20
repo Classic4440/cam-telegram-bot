@@ -58,7 +58,9 @@ cam-telegram-bot/
     ├── user_profiles.sql        # Long-term memory profile table
     ├── profile_timezone.sql     # Timezone preference field
     ├── saved_notes.sql          # Private saved-note table
-    └── bot_store_schema.sql     # Complete profiles/notes schema and XP RPC
+    ├── bot_store_schema.sql     # Legacy bootstrap for profiles/notes and XP RPC
+    └── migrations/              # Versioned database migrations
+        └── 20261020_01_bot_persistence.sql
 ```
 
 ## Key Features
@@ -107,13 +109,22 @@ TELEGRAM_TOKEN=your_bot_token
 AI_API_KEY=your_groq_key
 AI_VISION_MODEL=qwen/qwen3.8-27b  # optional; defaults to this Groq vision model
 SUPABASE_URL=optional
-SUPABASE_KEY=optional
+SUPABASE_KEY=server-side service_role/secret key only
 ```
 
-The bot reads credentials directly from the process environment; do not commit a `.env` file. Apply
-`supabase/user_profiles.sql` and `supabase/bot_store_schema.sql` in Supabase to enable durable user memory,
-profiles, timezone preferences, and saved notes. For durable server-side access,
-`SUPABASE_KEY` must be a server key permitted to bypass row-level security.
+The bot reads credentials directly from the process environment; do not commit a `.env` file. For a
+new or existing project, review and run
+[`supabase/migrations/20261020_01_bot_persistence.sql`](../supabase/migrations/20261020_01_bot_persistence.sql)
+as the database owner. It creates/validates the tables used by the current store, grants access only to
+the server-side `service_role`, enables RLS, and refreshes PostgREST's schema cache. It does not drop
+tables or delete user data. If it stops on an incompatible existing table or `add_xp` signature, inspect
+that object before making any manual migration.
+
+In Render, set `SUPABASE_URL` and a server-side Supabase `service_role`/secret key. Never use an
+anon/publishable key for this private bot and never expose a server-side key in Telegram or source
+control. If Supabase is not configured, persistence is process-local and users are warned that writes
+may be lost after restart. Missing-schema and permission failures are reported explicitly instead of
+being treated as successful writes.
 
 `/personal <information>` saves a user's profile and `/update` displays it. The profile is also included
 in the system prompt for AI chat and AI tasks. `/save <note>` stores a private note; use `/saved` to list

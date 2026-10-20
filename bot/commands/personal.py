@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from bot.formatting import reply
 from bot.registry import command
 from bot.state import get_state
+from bot.store import PersistenceFailure
 
 
 async def _require_private_chat(update: Update) -> bool:
@@ -41,8 +42,14 @@ async def save_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text("Please keep saved notes under 1,000 characters.")
         return
 
-    note = await get_state(context).store.add_note(user.id, text)
-    await message.reply_text(f"Saved note #{note['id']}. Use /saved to view it.")
+    store = get_state(context).store
+    try:
+        note = await store.add_note(user.id, text)
+    except PersistenceFailure as exc:
+        await message.reply_text(str(exc))
+        return
+    suffix = "" if store.durable else " (in memory only; it may be lost when the bot restarts)"
+    await message.reply_text(f"Saved note #{note['id']}{suffix}. Use /saved to view it.")
 
 
 @command(
@@ -59,12 +66,19 @@ async def list_saved_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not await _require_private_chat(update):
         return
 
-    notes = await get_state(context).store.list_notes(user.id)
+    store = get_state(context).store
+    try:
+        notes = await store.list_notes(user.id)
+    except PersistenceFailure as exc:
+        await message.reply_text(str(exc))
+        return
     if not notes:
-        await message.reply_text("You have no saved notes yet. Save one with /save <note>.")
+        suffix = "" if store.durable else " (the database is unavailable; this may not include saved notes)"
+        await message.reply_text("You have no saved notes yet. Save one with /save <note>." + suffix)
         return
     lines = [f"#{note['id']}: {note['body']}" for note in notes[-10:]]
-    await reply(message, "Your saved notes:\n" + "\n".join(lines))
+    suffix = "" if store.durable else "\n\n⚠️ Database unavailable; these results may be incomplete."
+    await reply(message, "Your saved notes:\n" + "\n".join(lines) + suffix)
 
 
 @command(
@@ -88,7 +102,15 @@ async def delete_saved_note(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except ValueError:
         await message.reply_text("Note ID must be a number. Use /saved to see your note IDs.")
         return
-    deleted = await get_state(context).store.delete_note(user.id, note_id)
+    store = get_state(context).store
+    try:
+        deleted = await store.delete_note(user.id, note_id)
+    except PersistenceFailure as exc:
+        await message.reply_text(str(exc))
+        return
+    if deleted and not store.durable:
+        await message.reply_text("Note deleted in memory only; the change may be lost when the bot restarts.")
+        return
     await message.reply_text(
         "Saved note deleted." if deleted else "I couldn't find that note in your saved notes."
     )
@@ -112,8 +134,13 @@ async def personal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     state = get_state(context)
-    await state.store.save_user_profile(user.id, text)
-    await message.reply_text("Got it! I'll remember that.")
+    try:
+        await state.store.save_user_profile(user.id, text)
+    except PersistenceFailure as exc:
+        await message.reply_text(str(exc))
+        return
+    suffix = "" if state.store.durable else " I can use it until this bot process restarts, but it isn't saved permanently."
+    await message.reply_text("Got it! I'll remember that." + suffix)
 
 
 @command(
@@ -129,7 +156,11 @@ async def update_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     state = get_state(context)
-    profile_data = await state.store.get_user_profile(user.id)
+    try:
+        profile_data = await state.store.get_user_profile(user.id)
+    except PersistenceFailure as exc:
+        await message.reply_text(str(exc))
+        return
     if not profile_data:
         profile_data = "No profile details have been saved yet."
     await message.reply_text(f"Here is what I remember about you: {profile_data}")
