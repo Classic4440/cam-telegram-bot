@@ -246,9 +246,12 @@ class SupabaseBackend:
 
     def flush_xp(self, deltas: dict[int, int], names: dict[int, str]) -> None:
         for user_id, amount in deltas.items():
-            self.client.rpc(
-                "add_xp", {"p_user_id": user_id, "p_username": names.get(user_id), "p_amount": amount}
-            ).execute()
+            parameters = {
+                "p_user_id": user_id,
+                "p_username": names.get(user_id),
+                "p_amount": amount,
+            }
+            self.client.rpc("add_xp", parameters).execute()
 
     def leaderboard(self, limit: int) -> list[dict[str, Any]]:
         return (

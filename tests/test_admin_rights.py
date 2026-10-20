@@ -10,7 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import _handle_polling_error, _poll_with_single_conflict_retry
+from app import (
+    POLLING_MAX_ATTEMPTS,
+    POLLING_RETRY_DELAY_SECONDS,
+    _handle_polling_error,
+    _poll_with_conflict_retries,
+)
 from bot.ai import build_system_prompt
 from bot.commands.admin import cmd_myrights
 from telegram.error import Conflict
@@ -95,7 +100,7 @@ def test_polling_conflict_requests_clean_shutdown() -> None:
     asyncio.run(run())
 
 
-def test_polling_startup_conflict_retries_once_then_shutdown() -> None:
+def test_polling_startup_conflict_retries_five_attempts() -> None:
     async def run() -> None:
         class FakeUpdater:
             running = False
@@ -105,7 +110,7 @@ def test_polling_startup_conflict_retries_once_then_shutdown() -> None:
 
             async def start_polling(self, **_kwargs) -> None:
                 self.calls += 1
-                if self.calls == 1:
+                if self.calls < POLLING_MAX_ATTEMPTS:
                     raise Conflict("terminated by other getUpdates request")
                 stop_event.set()
 
@@ -117,9 +122,35 @@ def test_polling_startup_conflict_retries_once_then_shutdown() -> None:
         loop = asyncio.get_running_loop()
 
         with patch("app._wait_before_polling_retry", new=AsyncMock(return_value=True)) as wait:
-            await _poll_with_single_conflict_retry(updater, loop, stop_event)
+            await _poll_with_conflict_retries(updater, loop, stop_event)
 
-        assert updater.calls == 2
-        wait.assert_awaited_once_with(stop_event)
+        assert updater.calls == POLLING_MAX_ATTEMPTS
+        assert wait.await_count == POLLING_MAX_ATTEMPTS - 1
+        assert POLLING_RETRY_DELAY_SECONDS == 10
+
+    asyncio.run(run())
+
+
+def test_polling_shuts_down_after_all_conflict_attempts_fail() -> None:
+    async def run() -> None:
+        class FakeUpdater:
+            running = False
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def start_polling(self, **_kwargs) -> None:
+                self.calls += 1
+                raise Conflict("terminated by other getUpdates request")
+
+        updater = FakeUpdater()
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        with patch("app._wait_before_polling_retry", new=AsyncMock(return_value=True)) as wait:
+            await _poll_with_conflict_retries(updater, loop, stop_event)
+
+        assert updater.calls == POLLING_MAX_ATTEMPTS
+        assert wait.await_count == POLLING_MAX_ATTEMPTS - 1
 
     asyncio.run(run())

@@ -24,6 +24,8 @@ from bot.store import build_store
 
 logger = logging.getLogger(__name__)
 health_app = Flask(__name__)
+POLLING_MAX_ATTEMPTS = 5
+POLLING_RETRY_DELAY_SECONDS = 10
 
 
 @health_app.get("/health")
@@ -69,19 +71,22 @@ async def _wait_before_polling_retry(stop_event: asyncio.Event) -> bool:
     if stop_event.is_set():
         return False
     try:
-        await asyncio.wait_for(stop_event.wait(), timeout=5)
+        await asyncio.wait_for(
+            stop_event.wait(),
+            timeout=POLLING_RETRY_DELAY_SECONDS,
+        )
     except asyncio.TimeoutError:
         return True
     return False
 
 
-async def _poll_with_single_conflict_retry(
+async def _poll_with_conflict_retries(
     updater: Updater,
     loop: asyncio.AbstractEventLoop,
     stop_event: asyncio.Event,
 ) -> None:
     conflict_event = asyncio.Event()
-    for attempt in range(2):
+    for attempt in range(POLLING_MAX_ATTEMPTS):
         conflict_event.clear()
         try:
             await updater.start_polling(
@@ -94,8 +99,15 @@ async def _poll_with_single_conflict_retry(
             logger.exception(
                 "CONFLICT: Another instance is likely running. Waiting for it to stop..."
             )
-            if attempt == 0 and await _wait_before_polling_retry(stop_event):
+            if (
+                attempt + 1 < POLLING_MAX_ATTEMPTS
+                and await _wait_before_polling_retry(stop_event)
+            ):
                 continue
+            logger.error(
+                "CONFLICT: Polling failed after %d attempts; shutting down cleanly.",
+                POLLING_MAX_ATTEMPTS,
+            )
             return
 
         result = await _wait_for_polling_event(stop_event, conflict_event)
@@ -104,10 +116,16 @@ async def _poll_with_single_conflict_retry(
 
         if updater.running:
             await updater.stop()
-        if attempt == 0 and await _wait_before_polling_retry(stop_event):
+        if (
+            attempt + 1 < POLLING_MAX_ATTEMPTS
+            and await _wait_before_polling_retry(stop_event)
+        ):
             continue
 
-        logger.error("CONFLICT: Polling still conflicts after retry; shutting down cleanly.")
+        logger.error(
+            "CONFLICT: Polling still conflicts after %d attempts; shutting down cleanly.",
+            POLLING_MAX_ATTEMPTS,
+        )
         return
 
 
@@ -177,7 +195,7 @@ async def main() -> None:
         async with application:
             await application.start()
             try:
-                await _poll_with_single_conflict_retry(updater, loop, stop_event)
+                await _poll_with_conflict_retries(updater, loop, stop_event)
             finally:
                 try:
                     if updater.running:
