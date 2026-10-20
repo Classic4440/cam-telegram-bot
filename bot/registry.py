@@ -201,26 +201,32 @@ async def _safe_reply(message, text: str) -> None:
 
 async def dispatch_callback(update, context) -> None:
     query = update.callback_query
-    if query is None or query.data is None or update.effective_user is None:
+    if query is None:
         return
-    state = get_state(context)
-    prefix, _, payload = query.data.partition(":")
-    handler = CALLBACKS.get(prefix)
-    if handler is None:
-        await query.answer("This button has expired.")
-        return
-    if state.limiter.consume(update.effective_user.id, 0.5) > 0:
-        await query.answer("Slow down a little 🙂")
-        return
-    state.stats.callbacks += 1
+    state = None
     try:
+        await query.answer()
+        if query.data is None or update.effective_user is None:
+            return
+        state = get_state(context)
+        prefix, _, payload = query.data.partition(":")
+        handler = CALLBACKS.get(prefix)
+        if handler is None:
+            return
+        if state.limiter.consume(update.effective_user.id, 0.5) > 0:
+            return
+        state.stats.callbacks += 1
         await handler(update, context, payload)
     except UserError as exc:
         await _answer(query, exc.message)
     except Exception:  # noqa: BLE001
-        state.stats.errors += 1
-        logger.exception("Unhandled error in callback %s", prefix)
-        await _answer(query, "Something went wrong.")
+        logger.exception("Unhandled callback routing error")
+        if state is not None:
+            state.stats.errors += 1
+        try:
+            await query.answer(text="An error occurred.", show_alert=True)
+        except TelegramError:
+            logger.exception("Could not show callback error alert")
 
 
 async def _answer(query, text: str) -> None:

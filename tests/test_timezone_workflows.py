@@ -55,7 +55,7 @@ def test_timezone_profile_round_trip_and_callback_saves_selection() -> None:
             "42:Africa/Kampala",
         )
 
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert (await store.get_profile(42))["timezone"] == "Africa/Kampala"
         assert "Africa/Kampala" in edit.await_args.args[0]
 
@@ -64,17 +64,17 @@ def test_timezone_profile_round_trip_and_callback_saves_selection() -> None:
 
 def test_timezone_callback_rejects_other_user_and_unknown_zone() -> None:
     async def run() -> None:
-        for payload, user_id, expected in (
-            ("42:Africa/Kampala", 7, "another user"),
-            ("42:Not/AZone", 42, "invalid"),
-        ):
+        for payload, user_id in (("42:Africa/Kampala", 7), ("42:Not/AZone", 42)):
             answer = AsyncMock()
+            edit = AsyncMock()
             update = SimpleNamespace(
-                callback_query=SimpleNamespace(answer=answer, edit_message_text=AsyncMock()),
+                callback_query=SimpleNamespace(answer=answer, edit_message_text=edit),
                 effective_user=SimpleNamespace(id=user_id),
             )
             await handle_timezone_callback(update, _context(), payload)
-            assert expected in answer.await_args.args[0]
+            answer.assert_not_awaited()
+            if user_id == 42:
+                assert "invalid" in edit.await_args.args[0]
 
     asyncio.run(run())
 

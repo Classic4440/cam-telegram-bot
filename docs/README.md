@@ -57,7 +57,8 @@ cam-telegram-bot/
 └── supabase/                     # Supabase RLS policies & migrations
     ├── user_profiles.sql        # Long-term memory profile table
     ├── profile_timezone.sql     # Timezone preference field
-    └── saved_notes.sql          # Private saved-note table
+    ├── saved_notes.sql          # Private saved-note table
+    └── bot_store_schema.sql     # Complete profiles/notes schema and XP RPC
 ```
 
 ## Key Features
@@ -110,8 +111,8 @@ SUPABASE_KEY=optional
 ```
 
 The bot reads credentials directly from the process environment; do not commit a `.env` file. Apply
-`supabase/user_profiles.sql`, `supabase/profile_timezone.sql`, and `supabase/saved_notes.sql` in Supabase
-to enable durable user memory, timezone preferences, and saved notes. For durable server-side access,
+`supabase/user_profiles.sql` and `supabase/bot_store_schema.sql` in Supabase to enable durable user memory,
+profiles, timezone preferences, and saved notes. For durable server-side access,
 `SUPABASE_KEY` must be a server key permitted to bypass row-level security.
 
 `/personal <information>` saves a user's profile and `/update` displays it. The profile is also included

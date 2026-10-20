@@ -186,18 +186,14 @@ async def handle_game_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         owner_id = int(parts[0])
     except (ValueError, IndexError):
-        await query.answer("This game button has expired.")
         await _edit_game(query, "This game button has expired. Start a new game with /game.")
         return
     if user is None or user.id != owner_id:
-        await query.answer("This game menu belongs to another player.", show_alert=True)
         return
     if len(parts) < 2:
-        await query.answer("This game button has expired.")
         await _edit_game(query, "This game button has expired. Start a new game with /game.")
         return
 
-    await query.answer()
     action = parts[1]
     argument = parts[2] if len(parts) > 2 else ""
     if action == "select":

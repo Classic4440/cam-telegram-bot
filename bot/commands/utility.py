@@ -82,18 +82,16 @@ async def handle_timezone_callback(
         user_id = int(parts[0])
         timezone_name = parts[1]
     except (ValueError, IndexError):
-        await query.answer("This timezone button has expired.")
+        await query.edit_message_text("This timezone button has expired. Send /timezone to choose again.")
         return
     if update.effective_user is None or update.effective_user.id != user_id:
-        await query.answer("This timezone menu belongs to another user.", show_alert=True)
         return
     try:
         get_zone(timezone_name)
     except TimeParseError:
-        await query.answer("This timezone option is invalid.", show_alert=True)
+        await query.edit_message_text("This timezone option is invalid. Send /timezone to choose again.")
         return
 
-    await query.answer()
     await get_state(context).store.set_timezone(user_id, timezone_name)
     await query.edit_message_text(
         f"✅ Timezone saved to your profile: {timezone_name}\n\n"
@@ -245,18 +243,27 @@ async def _cancel_reminder_conversation(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> int:
     query = update.callback_query
-    user = update.effective_user
-    if query is None or user is None:
+    if query is None:
         return ConversationHandler.END
-    parts = (query.data or "").split(":")
-    if len(parts) != 3 or parts[2] != str(user.id):
-        await query.answer("This cancel button belongs to another user.", show_alert=True)
-        return ASK_REMINDER_MESSAGE if context.user_data.get("reminder_due") else ASK_REMINDER_TIME
-    await query.answer()
-    context.user_data.pop("reminder_due", None)
-    context.user_data.pop("reminder_timezone", None)
-    await query.edit_message_text("Reminder setup cancelled.")
-    return ConversationHandler.END
+    try:
+        await query.answer()
+        user = update.effective_user
+        if user is None:
+            return ConversationHandler.END
+        parts = (query.data or "").split(":")
+        if len(parts) != 3 or parts[2] != str(user.id):
+            return ASK_REMINDER_MESSAGE if context.user_data.get("reminder_due") else ASK_REMINDER_TIME
+        context.user_data.pop("reminder_due", None)
+        context.user_data.pop("reminder_timezone", None)
+        await query.edit_message_text("Reminder setup cancelled.")
+        return ConversationHandler.END
+    except Exception:
+        logger.exception("Reminder cancel callback failed")
+        try:
+            await query.answer(text="An error occurred.", show_alert=True)
+        except Exception:
+            logger.exception("Could not show reminder cancel error alert")
+        return ConversationHandler.END
 
 
 async def _cancel_reminder_command(

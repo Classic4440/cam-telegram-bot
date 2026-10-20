@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from bot.commands.games import cmd_game, handle_game_callback
 from bot.commands.info import cmd_help, cmd_start, handle_help_callback, handle_start_callback
 from bot.formatting import html_footer, html_heading, present_message
-from bot.registry import build_handlers, discover
+from bot.registry import CALLBACKS, build_handlers, discover, dispatch_callback
 
 
 def _context(user_id: int = 42) -> SimpleNamespace:
@@ -96,7 +96,7 @@ def test_ttt_callback_answers_and_edits_menu_to_active_game() -> None:
 
         await handle_game_callback(update, context, "42:select:ttt")
 
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert context.user_data["tictactoe"] == [""] * 9
         edit.assert_awaited_once()
         assert edit.await_args.kwargs["reply_markup"] is not None
@@ -109,13 +109,12 @@ def test_stale_and_other_users_game_callbacks_are_safe() -> None:
     async def run() -> None:
         update, answer, edit = _callback_update("game:42:stale:unknown")
         await handle_game_callback(update, _context(), "bad")
-        answer.assert_awaited_once()
+        answer.assert_not_awaited()
         assert edit.await_args.args[0].find("expired") >= 0
 
         update, answer, edit = _callback_update("game:42:select:ttt", user_id=7)
         await handle_game_callback(update, _context(user_id=7), "42:select:ttt")
-        answer.assert_awaited_once()
-        assert answer.await_args.kwargs["show_alert"] is True
+        answer.assert_not_awaited()
         edit.assert_not_awaited()
 
     asyncio.run(run())
@@ -143,7 +142,7 @@ def test_help_command_shows_categories_and_callback_edits_to_category() -> None:
         callback_update, answer, edit = _callback_update("help:42:category:games")
         await handle_help_callback(callback_update, context, "42:category:games")
 
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         edit.assert_awaited_once()
         assert "/tictactoe" in edit.await_args.args[0]
         assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "⬅️ Back"
@@ -156,13 +155,13 @@ def test_help_callback_back_and_stale_payload_acknowledged() -> None:
         context = _context()
         update, answer, edit = _callback_update("help:42:back")
         await handle_help_callback(update, context, "42:back")
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert edit.await_args.kwargs["reply_markup"] is not None
 
         update, answer, edit = _callback_update("help:42:category:obsolete")
         await handle_help_callback(update, context, "42:category:obsolete")
-        answer.assert_awaited_once()
-        edit.assert_not_awaited()
+        answer.assert_not_awaited()
+        assert "expired" in edit.await_args.args[0]
 
     asyncio.run(run())
 
@@ -181,17 +180,17 @@ def test_start_menu_buttons_and_navigation_edit_message() -> None:
 
         update, answer, edit = _callback_update("start:42:games")
         await handle_start_callback(update, _context(), "42:games")
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "Rock Paper Scissors"
 
         update, answer, edit = _callback_update("start:42:home")
         await handle_start_callback(update, _context(), "42:home")
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🎮 Games"
 
         update, answer, edit = _callback_update("start:42:help")
         await handle_start_callback(update, _context(), "42:help")
-        answer.assert_awaited_once_with()
+        answer.assert_not_awaited()
         assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].text == "🎮 Games"
 
     asyncio.run(run())
@@ -211,3 +210,75 @@ def test_registry_installs_callback_query_handler() -> None:
     discover()
     handlers = build_handlers()
     assert any(isinstance(handler, CallbackQueryHandler) for handler in handlers)
+
+
+def test_dispatcher_answers_before_routing_menu_callback() -> None:
+    async def run() -> None:
+        discover()
+        order = []
+        answer = AsyncMock(side_effect=lambda: order.append("answer"))
+        edit = AsyncMock(side_effect=lambda *_args, **_kwargs: order.append("edit"))
+        query = SimpleNamespace(
+            data="help:42:category:games",
+            answer=answer,
+            edit_message_text=edit,
+        )
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=SimpleNamespace(id=42),
+        )
+        state = SimpleNamespace(
+            limiter=SimpleNamespace(consume=Mock(return_value=0)),
+            stats=SimpleNamespace(callbacks=0, errors=0),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={"state": state}),
+            user_data={},
+        )
+
+        await dispatch_callback(update, context)
+
+        answer.assert_awaited_once_with()
+        assert order[0] == "answer"
+        assert order[1] == "edit"
+        assert state.stats.callbacks == 1
+
+    asyncio.run(run())
+
+
+def test_dispatcher_logs_callback_error_and_attempts_alert_ack(caplog) -> None:
+    async def run() -> None:
+        prefix = "test_failure_callback"
+
+        async def fail(_update, _context, _payload):
+            raise RuntimeError("database callback failure")
+
+        CALLBACKS[prefix] = fail
+        answer = AsyncMock()
+        query = SimpleNamespace(data=f"{prefix}:test", answer=answer)
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_user=SimpleNamespace(id=42),
+        )
+        state = SimpleNamespace(
+            limiter=SimpleNamespace(consume=Mock(return_value=0)),
+            stats=SimpleNamespace(callbacks=0, errors=0),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={"state": state}),
+        )
+        try:
+            await dispatch_callback(update, context)
+        finally:
+            CALLBACKS.pop(prefix)
+
+        assert answer.await_args_list[0].args == ()
+        assert answer.await_args_list[0].kwargs == {}
+        assert answer.await_args_list[1].kwargs == {
+            "text": "An error occurred.",
+            "show_alert": True,
+        }
+        assert state.stats.errors == 1
+
+    asyncio.run(run())
+    assert "database callback failure" in caplog.text

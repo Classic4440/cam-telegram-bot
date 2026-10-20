@@ -41,5 +41,7 @@ def test_version_command_is_registered_and_returns_release_notes() -> None:
         assert "guided reminder conversation" in RELEASE_NOTES
         assert "AI response regeneration" in RELEASE_NOTES
         assert "private persistent notes" in RELEASE_NOTES
+        assert "Fixed Supabase PGRST205 missing-table errors" in RELEASE_NOTES
+        assert "Fixed unresponsive inline menus" in RELEASE_NOTES
 
     asyncio.run(run())

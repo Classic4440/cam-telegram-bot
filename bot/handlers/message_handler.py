@@ -120,10 +120,10 @@ async def handle_regenerate_callback(
     try:
         owner_id = int(payload)
     except ValueError:
-        await query.answer("This regenerate button has expired.")
+        if query.message is not None:
+            await query.edit_message_text("This regenerate button has expired.")
         return
     if user is None or user.id != owner_id:
-        await query.answer("This response belongs to another user.", show_alert=True)
         return
     response = query.message
     request = (
@@ -132,16 +132,15 @@ async def handle_regenerate_callback(
         else None
     )
     if not isinstance(request, dict):
-        await query.answer("This regenerate button has expired.")
+        if response is not None:
+            await query.edit_message_text("This regenerate button has expired.")
         return
 
     state = get_state(context)
-    # The callback dispatcher charges 0.5 tokens; charge the remaining half for an AI call.
     wait = state.limiter.consume(user.id, 0.5)
     if wait > 0:
-        await query.answer(f"Please wait {math.ceil(wait)}s before trying again.")
+        await response.reply_text(f"Please wait {math.ceil(wait)}s before trying again.")
         return
-    await query.answer("Generating a fresh response…")
     try:
         async with state.user_lock(user.id):
             result = await state.ai.chat(

@@ -111,13 +111,11 @@ async def handle_help_callback(
     try:
         owner_id = int(parts[0])
     except (ValueError, IndexError):
-        await query.answer("This help button has expired.")
+        await query.edit_message_text("This help button has expired. Send /help to open it again.")
         return
     if update.effective_user is None or update.effective_user.id != owner_id:
-        await query.answer("This help menu belongs to another user.", show_alert=True)
         return
     if len(parts) == 2 and parts[1] == "back":
-        await query.answer()
         await query.edit_message_text(
             present_message(
                 "👋 Welcome",
@@ -131,12 +129,11 @@ async def handle_help_callback(
     if len(parts) == 3 and parts[1] == "category":
         slug = parts[2]
         if slug not in dict(_HELP_CATEGORIES):
-            await query.answer("This help category has expired.")
+            await query.edit_message_text("This help category has expired. Send /help to open it again.")
             return
-        await query.answer()
         await _show_help_category(query, owner_id, slug)
         return
-    await query.answer("This help button has expired.")
+    await query.edit_message_text("This help button has expired. Send /help to open it again.")
 
 
 @callback("start")
@@ -150,16 +147,14 @@ async def handle_start_callback(
     try:
         owner_id = int(parts[0])
     except (ValueError, IndexError):
-        await query.answer("This menu has expired.")
+        await query.edit_message_text("This menu has expired. Send /start to open it again.")
         return
     if update.effective_user is None or update.effective_user.id != owner_id:
-        await query.answer("This menu belongs to another user.", show_alert=True)
         return
     if len(parts) != 2 or parts[1] not in {"home", "games", "help"}:
-        await query.answer("This menu button has expired.")
+        await query.edit_message_text("This menu button has expired. Send /start to open it again.")
         return
 
-    await query.answer()
     if parts[1] == "home":
         await query.edit_message_text(
             present_message(

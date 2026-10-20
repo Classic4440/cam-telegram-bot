@@ -77,7 +77,7 @@ def test_ai_reply_offers_regenerate_and_callback_edits_response() -> None:
         )
         await handle_regenerate_callback(callback_update, context, "42")
 
-        answer.assert_awaited_once_with("Generating a fresh response…")
+        answer.assert_not_awaited()
         assert edit.await_args.args[0] == "Fresh answer"
         assert edit.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "regen:42"
         assert calls == ["Tell me something", "Tell me something"]
@@ -134,13 +134,13 @@ def test_regenerate_callback_is_user_scoped_and_handles_provider_failure() -> No
 
         outsider = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=7))
         await handle_regenerate_callback(outsider, context, "42")
-        answer.assert_awaited_once_with("This response belongs to another user.", show_alert=True)
+        answer.assert_not_awaited()
         assert not edit.await_count
 
         answer.reset_mock()
         owner = SimpleNamespace(callback_query=query, effective_user=SimpleNamespace(id=42))
         await handle_regenerate_callback(owner, context, "42")
-        answer.assert_awaited_once_with("Generating a fresh response…")
+        answer.assert_not_awaited()
         assert "unavailable right now" in reply.await_args.args[0]
         assert state.stats.errors == 1
 
